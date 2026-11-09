@@ -396,7 +396,65 @@ pub fn settings_panel<'a>(
 }
 
 impl Session {
+    /// The start-up screen: logo, the real loading steps, and a fun fact.
+    fn loading_view(&self, loading: &crate::session::Loading) -> Element<'_, Msg> {
+        static LOGO: std::sync::OnceLock<image::Handle> = std::sync::OnceLock::new();
+        let logo = LOGO.get_or_init(|| image::Handle::from_bytes(&include_bytes!("../assets/icon.png")[..]));
+        let ready = loading.ready_at.is_some();
+        let icons = self.icons_progress();
+        // ✓ done, ● working on it, ○ not yet.
+        let step = |mark: &'static str, label: String, colour: Color| {
+            // Advanced shaping falls back to a font that has ✓.
+            let mark = text(mark).size(14).color(colour).width(20).shaping(Shaping::Advanced);
+            row![mark, text(label).size(14)].spacing(6).align_y(Alignment::Center)
+        };
+        let (done, working, waiting) = (p().online, p().accent, p().muted);
+        let mut steps = column![step("✓", "Settings and saved login".to_owned(), done)].spacing(8);
+        steps = steps.push(if ready {
+            step("✓", "Connected to Discord".to_owned(), done)
+        } else {
+            step("●", "Connecting to Discord…".to_owned(), working)
+        });
+        let mut progress = if ready { 0.7 } else { 0.25 };
+        match icons {
+            Some((loaded, total)) if ready => {
+                progress += 0.3 * if total == 0 { 1.0 } else { loaded as f32 / total as f32 };
+                steps = steps.push(step("●", format!("Loading server icons ({loaded}/{total})"), working));
+            }
+            Some(_) => steps = steps.push(step("○", "Loading server icons".to_owned(), waiting)),
+            None => {}
+        }
+        let offset = std::process::id() as usize;
+        let fact = crate::session::FUN_FACTS[(offset + (loading.started.elapsed().as_secs() / 6) as usize) % crate::session::FUN_FACTS.len()];
+        let mut card = column![
+            image(logo.clone()).width(64).height(64),
+            text("Ferrochat").size(28).font(BOLD).color(p().accent),
+            progress_bar(0.0..=1.0, progress).height(6).width(320),
+            steps,
+        ]
+        .spacing(16)
+        .align_x(Alignment::Center)
+        .width(380);
+        // Retries and connection problems, while still waiting on Discord.
+        if !ready && self.status != "Connecting…" {
+            card = card.push(text(self.status.as_str()).size(12).color(p().muted));
+        }
+        card = card.push(rule()).push(
+            column![
+                text("Did you know?").size(12).font(BOLD).color(p().accent),
+                text(fact).size(13).color(p().muted).width(Length::Fill).align_x(Horizontal::Center),
+            ]
+            .spacing(4)
+            .align_x(Alignment::Center),
+        );
+        let card = container(card).padding(32).style(fill(p().sidebar, 14.0));
+        container(card).center(Length::Fill).style(fill(p().rail, 0.0)).into()
+    }
+
     pub fn view(&self) -> Element<'_, Msg> {
+        if let Some(loading) = &self.loading {
+            return self.loading_view(loading);
+        }
         let mut layout = row![self.guild_rail(), self.channel_list()];
         match self.selected_channel.as_deref() {
             // A voice channel: the call's tiles, with its text chat beside them.

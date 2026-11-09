@@ -418,6 +418,55 @@ pub struct Session {
     playing: Option<crate::voice::player::Playback>,
     /// Audio being downloaded to play, by URL.
     loading_audio: Option<String>,
+    /// The start-up screen, until Discord has answered and server icons are in.
+    pub loading: Option<Loading>,
+}
+
+/// What the start-up screen shows. Each step is real: the gateway's READY,
+/// then the server icons downloading.
+pub struct Loading {
+    pub started: Instant,
+    /// When READY arrived.
+    pub ready_at: Option<Instant>,
+}
+
+/// After READY, the screen waits at most this long for server icons.
+const ICON_WAIT: Duration = Duration::from_secs(4);
+
+/// Shown on the start-up screen, a new one every few seconds.
+pub const FUN_FACTS: [&str; 14] = [
+    "\"Ferro\" comes from ferrum, Latin for iron. Fe is iron's symbol on the periodic table.",
+    "The Rust programming language is named after rust fungi, a famously tough family of plant parasites.",
+    "Ferris the crab is the Rust community's unofficial mascot.",
+    "The official Discord app is a web page running in its own copy of Chromium. Ferrochat draws every pixel itself.",
+    "Every Discord ID (a \"snowflake\") has the moment it was created built into it.",
+    "Discord's clock for those IDs starts on 1 January 2015, the year Discord launched.",
+    "Discord voice uses the Opus audio codec, standardised in 2012.",
+    "Discord encrypts voice and video calls end to end with a protocol called DAVE.",
+    "Press Ctrl+K in Ferrochat to jump to any server, channel or DM.",
+    "Paste a screenshot with Ctrl+V and Ferrochat attaches it to your message.",
+    "Iron is the most common element on Earth by mass. Most of it is in the core.",
+    "Settings → Performance can switch off images, voice and video to save even more memory.",
+    "Your token never touches a file: Ferrochat keeps it in Windows Credential Manager.",
+    "Ferrochat was written by Claude, an AI coding agent.",
+];
+
+impl Session {
+    /// (step done, total) for the server icons after READY; `None` when icons are off.
+    pub fn icons_progress(&self) -> Option<(usize, usize)> {
+        if !self.settings.load_avatars {
+            return None;
+        }
+        let urls: Vec<String> = self.guilds.iter().filter_map(|g| images::guild_icon_url(&g.id, g.icon.as_deref()?)).collect();
+        Some((urls.iter().filter(|url| self.images.is_settled(url)).count(), urls.len()))
+    }
+
+    /// The start-up screen can go: READY is in, and the icons are too (or took too long).
+    fn loading_finished(&self) -> bool {
+        let Some(ready_at) = self.loading.as_ref().and_then(|l| l.ready_at) else { return false };
+        let icons_in = self.icons_progress().is_none_or(|(done, total)| done >= total);
+        icons_in || ready_at.elapsed() >= ICON_WAIT
+    }
 }
 
 impl Session {
@@ -498,6 +547,7 @@ impl Session {
             composer: String::new(),
             status: "Connecting…".to_owned(),
             online: false,
+            loading: Some(Loading { started: Instant::now(), ready_at: None }),
         }
     }
 
@@ -515,6 +565,8 @@ impl Session {
         let mut session = Self::new("demo".to_owned(), settings);
         session.offline = true;
         let _ = session.on_gateway(Event::Ready(demo.ready.into()));
+        // FERROCHAT_DEMO_LOADING keeps the start-up screen, waiting for Discord.
+        session.loading = std::env::var_os("FERROCHAT_DEMO_LOADING").map(|_| Loading { started: Instant::now(), ready_at: None });
         session.selected_guild = Some("100".to_owned());
         session.selected_channel = Some("200".to_owned());
         let log = session.logs.entry("200".to_owned()).or_insert_with(ChannelLog::new);
@@ -710,6 +762,9 @@ impl Session {
         match msg {
             Msg::Gateway(event) => return self.on_gateway(event),
             Msg::Tick => {
+                if self.loading_finished() {
+                    self.loading = None;
+                }
                 let now = Instant::now();
                 self.typing.retain(|_, typists| {
                     typists.retain(|t| t.until > now);
@@ -1313,6 +1368,9 @@ impl Session {
             }
             Event::Ready(ready) => {
                 self.online = true;
+                if let Some(loading) = &mut self.loading {
+                    loading.ready_at.get_or_insert_with(Instant::now);
+                }
                 self.status = format!("Connected as {}", ready.user.display_name());
                 self.me = Some(ready.user);
                 self.guilds = ready.guilds;

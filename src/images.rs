@@ -103,6 +103,11 @@ impl ImageCache {
         }
     }
 
+    /// Downloaded and decoded, or given up on.
+    pub fn is_settled(&self, url: &str) -> bool {
+        self.slots.get(url).is_some_and(|slot| matches!(slot.state, State::Ready(_) | State::Animated(..) | State::Failed))
+    }
+
     pub fn set_clock(&mut self, ms: u64) {
         self.clock = ms;
     }

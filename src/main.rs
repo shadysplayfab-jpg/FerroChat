@@ -43,6 +43,8 @@ fn main() -> iced::Result {
     let window = window::Settings {
         size: Size::new(1100.0, 720.0),
         visible: !hidden,
+        // Title bar and taskbar; the exe's own icon comes from build.rs.
+        icon: window::icon::from_file_data(include_bytes!("../assets/icon.png"), None).ok(),
         // Closing may hide to the tray instead; see `Msg::CloseRequested`.
         exit_on_close_request: false,
         ..window::Settings::default()
@@ -575,6 +577,10 @@ impl App {
         if session.playback().is_some() {
             // Progress and the end of playback; only while something plays.
             subscriptions.push(iced::time::every(Duration::from_millis(250)).map(|_| Msg::Social(session::SocialMsg::PlayerTick)));
+        }
+        if session.loading.is_some() {
+            // Start-up screen: next fun fact, and noticing when loading is done.
+            subscriptions.push(iced::time::every(Duration::from_millis(500)).map(|_| Msg::Tick));
         }
         if session.has_typing() {
             subscriptions.push(iced::time::every(Duration::from_secs(1)).map(|_| Msg::Tick));

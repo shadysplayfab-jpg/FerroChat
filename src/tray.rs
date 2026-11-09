@@ -52,22 +52,11 @@ mod platform {
         Ok(Tray { _icon: icon })
     }
 
-    /// A 32×32 accent-coloured disc; avoids shipping an image file.
+    /// The app logo (assets/icon.png, built into the exe).
     fn icon() -> Result<Icon, String> {
-        const SIZE: u32 = 32;
-        let mut rgba = Vec::with_capacity((SIZE * SIZE * 4) as usize);
-        let centre = (SIZE as f32 - 1.0) / 2.0;
-        for y in 0..SIZE {
-            for x in 0..SIZE {
-                let distance = ((x as f32 - centre).powi(2) + (y as f32 - centre).powi(2)).sqrt();
-                let alpha = (centre + 0.5 - distance).clamp(0.0, 1.0);
-                // A lighter ring inside reads as a "chat bubble" at tray size.
-                let ring = (distance - 7.0).abs() < 1.6;
-                let (r, g, b) = if ring { (0xff, 0xe6, 0xd2) } else { (0xe0, 0x7a, 0x3a) };
-                rgba.extend_from_slice(&[r, g, b, (alpha * 255.0) as u8]);
-            }
-        }
-        Icon::from_rgba(rgba, SIZE, SIZE).map_err(|e| e.to_string())
+        let image = image::load_from_memory(include_bytes!("../assets/icon.png")).map_err(|e| e.to_string())?.to_rgba8();
+        let (width, height) = image.dimensions();
+        Icon::from_rgba(image.into_raw(), width, height).map_err(|e| e.to_string())
     }
 
     /// Hands tray clicks and menu choices to `send`. Set once: the tray crates
