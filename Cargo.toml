@@ -1,0 +1,91 @@
+[package]
+name = "ferrochat"
+version = "0.1.0"
+edition = "2021"
+description = "Lightweight native Discord client"
+license = "MIT"
+
+[dependencies]
+# "advanced" only exposes the widget API (for src/pointer.rs); it adds no code by itself.
+iced = { version = "0.13.1", features = ["tokio", "image", "advanced"] }
+emojis = "0.6"
+open = "5"
+tokio = { version = "1", features = ["time", "macros", "rt", "fs", "net"] }
+aes-gcm = "0.10"
+chacha20poly1305 = "0.10"
+# DAVE (Discord voice E2EE) over OpenMLS. Pinned: young crate, API changed in 0.2.
+davey = "=0.2.0"
+# Microphone and speakers (WASAPI on Windows).
+cpal = "0.15"
+# libopus bindings; the C library is built from source (needs CMake on Windows).
+audiopus = "0.2"
+# RNNoise noise suppression in pure Rust (only runs when turned on in Settings).
+nnnoiseless = { version = "0.5", default-features = false }
+notify-rust = "4"
+keyring = { version = "3", features = ["windows-native"] }
+dirs = "5"
+# native-tls uses Windows SChannel: no extra build tools needed.
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+# No default features: drops the charset decoder (Discord only sends UTF-8).
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "native-tls", "http2"] }
+# Only for reading image dimensions. Must be the version iced 0.13 uses, so the
+# codecs it enables are shared (a different version would have none).
+image = { version = "0.24", default-features = false }
+rfd = "0.15"
+serde = { version = "1", features = ["derive"] }
+
+# raw_value: gateway events are read straight into their types (see discord/gateway.rs).
+serde_json = { version = "1", features = ["raw_value"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+
+[target.'cfg(windows)'.dependencies]
+# Notification-area icon and its menu (only created when enabled in Settings).
+tray-icon = "0.26"
+# "Start with Windows": the per-user Run key. Same version already in the tree.
+winreg = "0.10"
+# Video: Windows' built-in H.264 decoder and encoder (Media Foundation); screen
+# capture (GDI); pasting images and files (clipboard). Same version already in the tree.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_MediaFoundation",
+    "Win32_Networking_WinSock",
+    "Win32_Security_Credentials",
+    "Win32_System_Com",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# Push-to-talk reads the key's state (GetAsyncKeyState); no keyboard hook.
+windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse"] }
+
+[dev-dependencies]
+# Same versions davey uses, to play the voice gateway's MLS external sender in tests.
+openmls = "=0.8.3"
+openmls_basic_credential = "=0.5.0"
+openmls_rust_crypto = "=0.5.1"
+
+[features]
+# Offline sample messages for checking rendering: cargo run --features demo
+demo = []
+
+[profile.release]
+# One codegen unit and full LTO: smaller, faster exe for a slower build.
+lto = "fat"
+codegen-units = 1
+strip = true
+# Panics stay unwinding: a panic in a voice or video thread must not close the app.
+
+# Like release, but builds in a few minutes instead of ~10: for testing changes.
+[profile.quick-release]
+inherits = "release"
+lto = "thin"
+codegen-units = 16

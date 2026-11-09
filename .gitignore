@@ -1,0 +1,5 @@
+/target
+*.pdb
+# Never commit a token or local settings.
+.env
+settings.json
