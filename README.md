@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo.svg" width="160" alt="Ferrochat logo"></p>
+
 # Ferrochat
 
 A lightweight Discord client for Windows, written in Rust.

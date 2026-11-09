@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Ferrochat</title>
+  <defs>
+    <!-- Dark tile with a warm glow from below, like a forge -->
+    <radialGradient id="tile" cx="0.5" cy="0.95" r="0.9">
+      <stop offset="0" stop-color="#3a1a10"/>
+      <stop offset="0.55" stop-color="#1a1418"/>
+      <stop offset="1" stop-color="#0d0b10"/>
+    </radialGradient>
+    <!-- Molten metal bubble: hot yellow top to deep rust -->
+    <linearGradient id="molten" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#ffb35c"/>
+      <stop offset="0.45" stop-color="#ef6f2a"/>
+      <stop offset="1" stop-color="#a8360f"/>
+    </linearGradient>
+    <!-- Brushed steel letters -->
+    <linearGradient id="steel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.5" stop-color="#ffe9d6"/>
+      <stop offset="0.52" stop-color="#f2c9a6"/>
+      <stop offset="1" stop-color="#fff1e4"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#5a1c05" flood-opacity="0.7"/>
+    </filter>
+    <clipPath id="bubbleClip">
+      <path id="bubble" d="M136 112h240a56 56 0 0 1 56 56v136a56 56 0 0 1-56 56H236l-76 62a8 8 0 0 1-13-6v-56h-11a56 56 0 0 1-56-56V168a56 56 0 0 1 56-56z"/>
+    </clipPath>
+  </defs>
+
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#tile)"/>
+  <rect x="17.5" y="17.5" width="477" height="477" rx="110.5" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="3"/>
+
+  <!-- Heat glow behind the bubble -->
+  <use href="#bubble" fill="#ff6a1a" opacity="0.55" filter="url(#glow)"/>
+
+  <!-- Bubble -->
+  <use href="#bubble" fill="url(#molten)"/>
+  <!-- Glossy top highlight -->
+  <g clip-path="url(#bubbleClip)">
+    <ellipse cx="256" cy="118" rx="200" ry="70" fill="url(#shine)"/>
+  </g>
+  <use href="#bubble" fill="none" stroke="#ffd2a8" stroke-opacity="0.6" stroke-width="3"/>
+
+  <!-- "Fe", drawn as shapes -->
+  <g fill="url(#steel)" filter="url(#shadow)">
+    <rect x="170" y="168" width="30" height="138" rx="6"/>
+    <rect x="170" y="168" width="92" height="28" rx="6"/>
+    <rect x="170" y="224" width="74" height="26" rx="6"/>
+    <path d="M330 214c-36 0-62 25-62 48s26 46 62 46c22 0 38-7 49-18l-17-18c-8 7-18 11-31 11-17 0-29-8-32-22h82c1-4 1-7 1-10 0-21-20-37-52-37zm-31 38c4-12 15-19 30-19s25 7 28 19z"/>
+  </g>
+
+  <!-- A few sparks -->
+  <g fill="#ffd27a">
+    <circle cx="420" cy="104" r="6"/>
+    <circle cx="446" cy="140" r="3.5" opacity="0.8"/>
+    <circle cx="398" cy="76" r="3" opacity="0.7"/>
+    <circle cx="452" cy="92" r="2.5" opacity="0.6"/>
+  </g>
+</svg>
