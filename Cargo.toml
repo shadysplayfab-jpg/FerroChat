@@ -1,6 +1,6 @@
 [package]
 name = "ferrochat"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Lightweight native Discord client"
 license = "MIT"
@@ -27,7 +27,7 @@ dirs = "5"
 # native-tls uses Windows SChannel: no extra build tools needed.
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 # No default features: drops the charset decoder (Discord only sends UTF-8).
-reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "native-tls", "http2"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "native-tls", "http2", "cookies"] }
 # Only for reading image dimensions. Must be the version iced 0.13 uses, so the
 # codecs it enables are shared (a different version would have none).
 image = { version = "0.24", default-features = false }
@@ -64,6 +64,10 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+# Login captchas: a WebView2 (Windows' Edge engine) window, only in a helper
+# process started when Discord asks for one (src/captcha.rs).
+wry = "0.57"
+tao = "0.37"
 # Push-to-talk reads the key's state (GetAsyncKeyState); no keyboard hook.
 windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse"] }
 

@@ -25,12 +25,30 @@ That's it. Nothing to install. Needs 64-bit Windows 10 or 11.
 
 ## How to log in
 
-Ferrochat logs in with a **token**, a long code that acts like your password.
+### The easy way: email and password
+
+1. Open Ferrochat.
+2. Type your Discord email (or phone number) and password.
+3. Tick **Remember me** if you want to stay logged in.
+4. Click **Log in**.
+5. If you use two-factor login, type the 6-digit code from your authenticator
+   app (or a backup code) and click **Verify**.
+
+Your password goes straight to Discord and is never saved. If Discord asks for
+a captcha (it sometimes does for new logins), a small window opens with it:
+solve it and the login carries on. That window uses Windows' built-in Edge
+engine (WebView2) and only exists while the captcha is open. Two-factor by text message (SMS) isn't supported; use your authenticator app or
+a backup code.
+
+### Using a token instead
+
+A token is a long code that acts like your password. Use one for bots, or when
+email login asks for a captcha.
 
 > 🔒 **Never share your token.** Anyone who has it can use your account. If it
 > leaks, change your Discord password: the old token stops working.
 
-### Option A: your own account (spare account recommended)
+### Token option A: your own account (spare account recommended)
 
 1. Open <https://discord.com/app> in Chrome, Edge or Firefox and log in.
 2. Press **F12**. A panel opens.
@@ -40,10 +58,10 @@ Ferrochat logs in with a **token**, a long code that acts like your password.
 6. Click one of the lines (for example `messages?limit=50`).
 7. On the right, open **Headers** and scroll to **Request Headers**.
 8. Find **Authorization**. Copy its value (a long code with two dots in it).
-9. Open Ferrochat, paste it into the box, tick **Remember me**, and click
-   **Log in**.
+9. Open Ferrochat, paste it into the **Token** box, tick **Remember me**, and
+   click **Log in with token**.
 
-### Option B: a bot (allowed by Discord)
+### Token option B: a bot (allowed by Discord)
 
 A bot is a separate account. It only sees servers you add it to, and has no
 friends or DMs.
@@ -72,7 +90,7 @@ friends or DMs.
 | Message | Fix |
 |---|---|
 | `4004: Authentication failed` | Wrong or old token. Copy a fresh one. |
-| `4014: Disallowed intent(s)` | Bot only: do step 3 of Option B. |
+| `4014: Disallowed intent(s)` | Bot only: do step 3 of Token option B. |
 | Asks for a captcha | Do that step (joining a server, adding a friend) in the browser. |
 | Stuck on "Connecting…" | Check your internet or firewall. |
 

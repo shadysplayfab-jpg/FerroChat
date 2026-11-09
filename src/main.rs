@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod captcha;
 mod clipboard;
 mod commands;
 mod credentials;
@@ -29,6 +30,11 @@ use settings::Settings;
 use tray::TrayEvent;
 
 fn main() -> iced::Result {
+    // A copy started only to show a login captcha (see src/captcha.rs).
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some(captcha::ARG) {
+        captcha::run_helper(args.get(2).map_or("", String::as_str), args.get(3).map_or("", String::as_str));
+    }
     let (settings, warning) = settings::load();
     // The software renderer measured ~28 MB vs ~208 MB for wgpu at the login screen.
     // ICED_BACKEND, when set, wins over the setting.
@@ -60,6 +66,14 @@ fn main() -> iced::Result {
 pub enum Msg {
     TokenChanged(String),
     Login,
+    /// Email and password login: the fields, then sending them (or the 2FA code).
+    LoginEmail(String),
+    LoginPassword(String),
+    LoginCode(String),
+    PasswordLogin,
+    PasswordLoginDone(Result<discord::rest::LoginStep, String>),
+    /// The captcha window's answer (`None`: closed), with Discord's rqtoken.
+    CaptchaSolved(Result<Option<String>, String>, Option<String>),
     Logout,
     /// Saved accounts (user id).
     SwitchAccount(String),
@@ -215,6 +229,7 @@ struct App {
     /// The notification-area icon, while "Minimize to tray" is on.
     tray: Option<tray::Tray>,
     token_input: String,
+    password_form: view::PasswordForm,
     /// Login problems and settings warnings shown on the login screen.
     login_error: Option<String>,
     session: Option<Session>,
@@ -240,6 +255,7 @@ impl App {
             tray: None,
             settings,
             token_input: String::new(),
+            password_form: view::PasswordForm::default(),
             login_error: warning,
             session: None,
             show_settings: false,
@@ -360,6 +376,67 @@ impl App {
         }
         match msg {
             Msg::TokenChanged(value) => self.token_input = value,
+            Msg::LoginEmail(value) => self.password_form.email = value,
+            Msg::LoginPassword(value) => self.password_form.password = value,
+            Msg::LoginCode(value) => self.password_form.code = value,
+            Msg::PasswordLogin => {
+                let form = &mut self.password_form;
+                if form.busy {
+                    return Task::none();
+                }
+                let request = match form.ticket.clone() {
+                    Some(ticket) if !form.code.trim().is_empty() => {
+                        let code = std::mem::take(&mut form.code);
+                        Task::perform(discord::rest::login_code(ticket, code), |result| {
+                            Msg::PasswordLoginDone(result.map(discord::rest::LoginStep::Token))
+                        })
+                    }
+                    None if !form.email.trim().is_empty() && !form.password.is_empty() => {
+                        Task::perform(discord::rest::login_with_password(form.email.trim().to_owned(), form.password.clone(), None), Msg::PasswordLoginDone)
+                    }
+                    _ => return Task::none(),
+                };
+                form.busy = true;
+                self.login_error = None;
+                return request;
+            }
+            Msg::PasswordLoginDone(result) => {
+                let form = &mut self.password_form;
+                form.busy = false;
+                // Kept only for a retry with a captcha answer; gone after any other outcome.
+                if !matches!(result, Ok(discord::rest::LoginStep::Captcha(_))) {
+                    form.password.clear();
+                }
+                match result {
+                    Ok(discord::rest::LoginStep::Token(token)) => {
+                        self.password_form = view::PasswordForm::default();
+                        self.start(token, self.settings.remember_login);
+                    }
+                    Ok(discord::rest::LoginStep::NeedsCode(ticket)) => form.ticket = Some(ticket),
+                    Ok(discord::rest::LoginStep::Captcha(request)) => {
+                        form.busy = true;
+                        let rqtoken = request.rqtoken;
+                        return Task::perform(captcha::solve(request.sitekey, request.rqdata), move |answer| {
+                            Msg::CaptchaSolved(answer, rqtoken.clone())
+                        });
+                    }
+                    Err(error) => self.login_error = Some(error),
+                }
+            }
+            Msg::CaptchaSolved(answer, rqtoken) => {
+                let form = &mut self.password_form;
+                match answer {
+                    Ok(Some(key)) => {
+                        let captcha = discord::rest::CaptchaAnswer { key, rqtoken };
+                        let login = discord::rest::login_with_password(form.email.trim().to_owned(), form.password.clone(), Some(captcha));
+                        return Task::perform(login, Msg::PasswordLoginDone);
+                    }
+                    Ok(None) => self.login_error = Some("The captcha was closed, so you're not logged in.".to_owned()),
+                    Err(error) => self.login_error = Some(error),
+                }
+                form.busy = false;
+                form.password.clear();
+            }
             Msg::Login => {
                 let token = std::mem::take(&mut self.token_input);
                 self.start(token, self.settings.remember_login);
@@ -597,7 +674,7 @@ impl App {
         }
         match &self.session {
             Some(session) => session.view(),
-            None => view::login(&self.token_input, self.login_error.as_deref(), &self.settings),
+            None => view::login(&self.token_input, &self.password_form, self.login_error.as_deref(), &self.settings),
         }
     }
 }

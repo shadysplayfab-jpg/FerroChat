@@ -53,30 +53,54 @@ const STATUS_CHARS: usize = 22;
 const CHANNEL_CHARS: usize = 26;
 const MEMBER_CHARS: usize = 18;
 
-pub fn login<'a>(token: &'a str, error: Option<&'a str>, settings: &'a Settings) -> Element<'a, Msg> {
+/// The email and password login on the login screen.
+#[derive(Default)]
+pub struct PasswordForm {
+    pub email: String,
+    /// Cleared as soon as it's sent.
+    pub password: String,
+    /// Two-factor code, once Discord asks for it.
+    pub code: String,
+    /// Set when Discord wants a two-factor code for this login.
+    pub ticket: Option<crate::discord::rest::CodeTicket>,
+    pub busy: bool,
+}
+
+pub fn login<'a>(token: &'a str, form: &'a PasswordForm, error: Option<&'a str>, settings: &'a Settings) -> Element<'a, Msg> {
     let remember = settings.remember_login;
     let note = if remember {
-        "Your token is saved encrypted in Windows Credential Manager. Log out to remove it."
+        "Your login is saved encrypted in Windows Credential Manager. Log out to remove it. Your password is never saved."
     } else {
-        "Your token is kept in memory only and never written to disk."
+        "Your login is kept in memory only and never written to disk."
     };
-    let mut form = column![
-        text("Ferrochat").size(32).font(BOLD).color(p().accent),
-        text("A lightweight client. Paste your token to log in.").size(14).color(p().muted),
-        text_input("Token", token)
-            .on_input(Msg::TokenChanged)
-            .on_submit(Msg::Login)
-            .secure(true)
-            .padding(12),
-        checkbox("Remember me", remember).on_toggle(|on| Msg::Setting(Change::RememberLogin(on))),
-        text(note).size(12).color(p().muted),
-        button(container(text("Log in").font(BOLD)).center_x(Length::Fill)).width(Length::Fill).on_press(Msg::Login).padding(10),
-    ]
-    .spacing(14)
-    .width(380);
+    let wide = |label: &'static str, busy: bool, msg: Msg| {
+        let label = if busy { "Logging in…" } else { label };
+        button(container(text(label).font(BOLD)).center_x(Length::Fill)).width(Length::Fill).on_press_maybe((!busy).then_some(msg)).padding(10)
+    };
+    let mut fields = column![text("Ferrochat").size(32).font(BOLD).color(p().accent)].spacing(14).width(380);
+    fields = if form.ticket.is_some() {
+        fields
+            .push(text("Two-factor login: enter the 6-digit code from your authenticator app (or a backup code).").size(14).color(p().muted))
+            .push(text_input("Code", &form.code).on_input(Msg::LoginCode).on_submit(Msg::PasswordLogin).padding(12))
+            .push(wide("Verify", form.busy, Msg::PasswordLogin))
+    } else {
+        fields
+            .push(text("Log in with your Discord account.").size(14).color(p().muted))
+            .push(text_input("Email or phone number", &form.email).on_input(Msg::LoginEmail).on_submit(Msg::PasswordLogin).padding(12))
+            .push(text_input("Password", &form.password).on_input(Msg::LoginPassword).on_submit(Msg::PasswordLogin).secure(true).padding(12))
+            .push(wide("Log in", form.busy, Msg::PasswordLogin))
+    };
     if let Some(error) = error {
-        form = form.push(text(error).size(13).color(p().error));
+        fields = fields.push(text(error).size(13).color(p().error));
     }
+    let mut form = fields
+        .push(checkbox("Remember me", remember).on_toggle(|on| Msg::Setting(Change::RememberLogin(on))))
+        .push(text(note).size(12).color(p().muted))
+        .push(text("Third-party clients are against Discord's rules: use a spare account.").size(12).color(p().muted))
+        .push(rule())
+        .push(section_label("Or paste a token (bots, or if login asks for a captcha)"))
+        .push(text_input("Token", token).on_input(Msg::TokenChanged).on_submit(Msg::Login).secure(true).padding(12))
+        .push(wide("Log in with token", false, Msg::Login));
     if !settings.accounts.is_empty() {
         let mut saved = column![section_label("Saved accounts")].spacing(6);
         for account in &settings.accounts {

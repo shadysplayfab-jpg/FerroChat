@@ -1302,6 +1302,12 @@ impl Session {
             | Msg::Ignored
             | Msg::TokenChanged(_)
             | Msg::Login
+            | Msg::LoginEmail(_)
+            | Msg::LoginPassword(_)
+            | Msg::LoginCode(_)
+            | Msg::PasswordLogin
+            | Msg::PasswordLoginDone(_)
+            | Msg::CaptchaSolved(..)
             | Msg::Logout
             | Msg::SwitchAccount(_)
             | Msg::AddAccount

@@ -394,6 +394,193 @@ impl Rest {
     }
 }
 
+/// What Discord answered to an email and password login.
+#[derive(Debug, Clone)]
+pub enum LoginStep {
+    Token(String),
+    /// Two-factor is on: send the code with this ticket and login instance.
+    NeedsCode(CodeTicket),
+    /// Discord wants an hCaptcha solved first; log in again with its answer.
+    Captcha(CaptchaRequest),
+}
+
+/// What the two-factor step needs from the password step. Discord only
+/// accepts the code together with both (the web app sends both too).
+#[derive(Debug, Clone)]
+pub struct CodeTicket {
+    pub ticket: String,
+    pub login_instance_id: Option<String>,
+    fingerprint: Option<String>,
+}
+
+/// One connection for every login step, keeping Discord's cookies between
+/// them, with the headers Discord's own web app sends.
+fn login_client() -> &'static Client {
+    static CLIENT: std::sync::OnceLock<Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        let properties = json!({
+            "os": "Windows", "browser": "Chrome", "device": "", "system_locale": "en-US",
+            "browser_user_agent": LOGIN_USER_AGENT, "browser_version": "131.0.0.0", "os_version": "10",
+            "referrer": "", "referring_domain": "", "release_channel": "stable", "client_build_number": 9999,
+        });
+        let mut headers = reqwest::header::HeaderMap::new();
+        if let Ok(value) = reqwest::header::HeaderValue::from_str(&base64(properties.to_string().as_bytes())) {
+            headers.insert("X-Super-Properties", value);
+        }
+        headers.insert("X-Discord-Locale", reqwest::header::HeaderValue::from_static("en-US"));
+        Client::builder()
+            .cookie_store(true)
+            .user_agent(LOGIN_USER_AGENT)
+            .default_headers(headers)
+            .build()
+            .unwrap_or_else(|_| Client::new())
+    })
+}
+
+const LOGIN_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+/// Standard base64 (for the X-Super-Properties header).
+fn base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = chunk.iter().enumerate().fold(0u32, |n, (i, &b)| n | u32::from(b) << (16 - 8 * i));
+        for i in 0..4 {
+            out.push(if i <= chunk.len() { TABLE[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+        }
+    }
+    out
+}
+
+/// The browser fingerprint Discord's web app gets before logging in, and
+/// sends with each login step.
+async fn fingerprint() -> Option<String> {
+    let answer: Value = login_client().get(format!("{AUTH_API}/experiments")).send().await.ok()?.json().await.ok()?;
+    answer["fingerprint"].as_str().map(str::to_owned)
+}
+
+/// The API version Discord's web app logs in with.
+const AUTH_API: &str = "https://discord.com/api/v9";
+
+/// A captcha Discord asked for, as it sent it.
+#[derive(Debug, Clone)]
+pub struct CaptchaRequest {
+    pub sitekey: String,
+    /// Extra data for hCaptcha, sent back as is.
+    pub rqdata: Option<String>,
+    /// Sent with the answer, so Discord matches the two.
+    pub rqtoken: Option<String>,
+}
+
+/// A solved captcha to send along with a login.
+#[derive(Debug, Clone)]
+pub struct CaptchaAnswer {
+    pub key: String,
+    pub rqtoken: Option<String>,
+}
+
+/// Email (or phone) and password login, with a solved captcha when Discord
+/// asked for one. The password only travels in this request to Discord; it's
+/// never stored.
+pub async fn login_with_password(login: String, password: String, captcha: Option<CaptchaAnswer>) -> Result<LoginStep, String> {
+    let body = json!({ "login": login, "password": password, "undelete": false, "login_source": null, "gift_code_sku_id": null });
+    let fingerprint = fingerprint().await;
+    let answer = match auth_request("/auth/login", body, captcha, fingerprint.as_deref()).await {
+        Ok(answer) => answer,
+        Err((_, answer)) if answer["captcha_sitekey"].is_string() => {
+            let text = |name: &str| answer[name].as_str().map(str::to_owned);
+            return Ok(LoginStep::Captcha(CaptchaRequest {
+                sitekey: text("captcha_sitekey").unwrap_or_default(),
+                rqdata: text("captcha_rqdata"),
+                rqtoken: text("captcha_rqtoken"),
+            }));
+        }
+        Err((status, answer)) => return Err(login_error(status, &answer)),
+    };
+    if let Some(token) = answer["token"].as_str() {
+        return Ok(LoginStep::Token(token.to_owned()));
+    }
+    match answer["ticket"].as_str() {
+        Some(ticket) if answer["mfa"].as_bool() == Some(true) => Ok(LoginStep::NeedsCode(CodeTicket {
+            ticket: ticket.to_owned(),
+            login_instance_id: answer["login_instance_id"].as_str().map(str::to_owned),
+            fingerprint,
+        })),
+        _ => Err("Discord didn't send a login token.".to_owned()),
+    }
+}
+
+/// Where a two-factor code goes: 6 digits come from an authenticator app,
+/// anything else is a backup code.
+fn code_kind(code: &str) -> &'static str {
+    if code.len() == 6 && code.bytes().all(|b| b.is_ascii_digit()) {
+        "totp"
+    } else {
+        "backup"
+    }
+}
+
+/// The 6-digit authenticator code (or an 8-character backup code) for a login ticket.
+pub async fn login_code(ticket: CodeTicket, code: String) -> Result<String, String> {
+    let code: String = code.chars().filter(|c| !c.is_whitespace() && *c != '-').collect();
+    let body = json!({
+        "code": code,
+        "ticket": ticket.ticket,
+        "login_source": null,
+        "gift_code_sku_id": null,
+        "login_instance_id": ticket.login_instance_id,
+    });
+    let answer = auth_request(&format!("/auth/mfa/{}", code_kind(&code)), body, None, ticket.fingerprint.as_deref())
+        .await
+        .map_err(|(status, answer)| login_error(status, &answer))?;
+    answer["token"].as_str().map(str::to_owned).ok_or_else(|| "Discord didn't send a login token.".to_owned())
+}
+
+/// Discord's answer, or its refusal (status and body).
+async fn auth_request(path: &str, body: Value, captcha: Option<CaptchaAnswer>, fingerprint: Option<&str>) -> Result<Value, (StatusCode, Value)> {
+    let mut request = login_client().post(format!("{AUTH_API}{path}")).json(&body);
+    if let Some(fingerprint) = fingerprint {
+        request = request.header("X-Fingerprint", fingerprint);
+    }
+    if let Some(captcha) = captcha {
+        request = request.header("X-Captcha-Key", captcha.key);
+        if let Some(rqtoken) = captcha.rqtoken {
+            request = request.header("X-Captcha-Rqtoken", rqtoken);
+        }
+    }
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(error) => return Err((StatusCode::SERVICE_UNAVAILABLE, json!({ "message": format!("Couldn't reach Discord: {error}") }))),
+    };
+    let status = response.status();
+    let answer: Value = response.json().await.unwrap_or(Value::Null);
+    if status.is_success() {
+        Ok(answer)
+    } else {
+        Err((status, answer))
+    }
+}
+
+/// Discord's refusal, in words someone can act on.
+fn login_error(status: StatusCode, answer: &Value) -> String {
+    if answer.get("captcha_key").is_some() {
+        return "Discord didn't accept the captcha. Try again, or use the token box below.".to_owned();
+    }
+    if status == StatusCode::TOO_MANY_REQUESTS {
+        return "Too many tries. Wait a minute, then try again.".to_owned();
+    }
+    // Field errors: {"errors": {"login": {"_errors": [{"code": "...", "message": "..."}]}}}
+    let field = ["login", "password", "code", "ticket"].iter().map(|name| &answer["errors"][name]["_errors"][0]).find(|e| e.is_object());
+    let message = field.and_then(|e| e["message"].as_str()).or(answer["message"].as_str());
+    // Discord's own code, so a report says exactly what it refused.
+    let code = field.and_then(|e| e["code"].as_str().map(str::to_owned)).or(answer["code"].as_u64().map(|c| c.to_string()));
+    match (message, code) {
+        (Some(message), Some(code)) => format!("{message} ({code})"),
+        (Some(message), None) => message.to_owned(),
+        (None, _) => format!("Login failed (HTTP {status})."),
+    }
+}
+
 #[derive(Deserialize, Default)]
 struct ApiError {
     #[serde(default)]
@@ -428,4 +615,38 @@ async fn check(response: Response) -> Result<Response, String> {
         _ if error.message.is_empty() => format!("HTTP {status}"),
         _ => format!("HTTP {status}: {}", error.message),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn login_errors_are_explained() {
+        let captcha = json!({ "captcha_key": ["captcha-required"], "captcha_sitekey": "x" });
+        assert!(login_error(StatusCode::BAD_REQUEST, &captcha).contains("captcha"), "a captcha answer Discord refused");
+        let wrong = json!({ "code": 50035, "errors": { "login": { "_errors": [{ "code": "INVALID_LOGIN", "message": "Login or password is invalid." }] } } });
+        assert_eq!(login_error(StatusCode::BAD_REQUEST, &wrong), "Login or password is invalid. (INVALID_LOGIN)");
+        let code = json!({ "message": "Invalid two-factor code", "code": 60008 });
+        assert_eq!(login_error(StatusCode::BAD_REQUEST, &code), "Invalid two-factor code (60008)");
+        let ticket = json!({ "message": "Invalid Form Body", "code": 50035, "errors": { "ticket": { "_errors": [{ "code": "MFA_INVALID_TICKET", "message": "Invalid two-factor auth ticket" }] } } });
+        assert_eq!(login_error(StatusCode::BAD_REQUEST, &ticket), "Invalid two-factor auth ticket (MFA_INVALID_TICKET)");
+        assert!(login_error(StatusCode::TOO_MANY_REQUESTS, &Value::Null).contains("Too many tries"));
+        assert_eq!(login_error(StatusCode::INTERNAL_SERVER_ERROR, &Value::Null), "Login failed (HTTP 500 Internal Server Error).");
+    }
+
+    #[test]
+    fn base64_matches_the_standard() {
+        assert_eq!(base64(b"Man"), "TWFu");
+        assert_eq!(base64(b"Ma"), "TWE=");
+        assert_eq!(base64(b"M"), "TQ==");
+        assert_eq!(base64(b""), "");
+    }
+
+    #[test]
+    fn authenticator_and_backup_codes_go_to_their_own_endpoints() {
+        assert_eq!(code_kind("123456"), "totp");
+        assert_eq!(code_kind("abcd1234"), "backup");
+        assert_eq!(code_kind("12345678"), "backup", "backup codes can be all digits, but they're 8 long");
+    }
 }
