@@ -2,133 +2,106 @@
 
 # Ferrochat
 
-A lightweight, native Discord client for Windows, written in Rust.
+A native Discord client for Windows, built with Rust. It uses less memory than a web browser based client. With the GPU renderer turned off, it typically uses about 60–100 MB.
 
-It's a real native app, not a web browser in disguise like the official one, so
-it uses far less memory: about 60–100 MB with the GPU renderer off.
+Ferrochat is developed with Codex, OpenAI's coding agent, under the direction and testing of the project maintainer.
 
-Ferrochat is developed with Codex, OpenAI's coding agent, under the direction
-and testing of the project maintainer.
-
-> ⚠️ **Account risk:** Discord's rules forbid third-party clients on normal
-> accounts, and accounts can be banned for it. Use a spare account, or a bot
-> (bots are allowed).
+> **Before you log in:** Discord may ban accounts for using third-party clients. Use a spare account. Discord bots are allowed.
 
 ## Download
 
-1. Go to [Releases](https://github.com/shadysplayfab-jpg/FerroChat/releases)
-   and download `ferrochat.exe`. The current release is **v0.3.1**.
-2. Double-click it. If Windows shows "Windows protected your PC", click
-   **More info → Run anyway**. (The exe isn't code-signed.)
+1. Open [Ferrochat Releases](https://github.com/shadysplayfab-jpg/FerroChat/releases).
+2. Download `ferrochat.exe` from the latest release. The current release is **v0.3.1**.
+3. Open the file. If Windows shows a security warning, the app is unsigned. Click **More info → Run anyway** if you choose to continue.
 
-That's it. Nothing to install. Needs 64-bit Windows 10 or 11.
+Ferrochat needs 64-bit Windows 10 or 11. There is nothing to install.
 
-### Verify the download
+### Check your download
 
-Each release includes a SHA-256 checksum file. In PowerShell, run
-`Get-FileHash .\ferrochat.exe -Algorithm SHA256` and compare its hash with
-`ferrochat.exe.sha256` from the same release.
+Each release includes a SHA-256 checksum file. Open PowerShell in the folder where you downloaded Ferrochat and run:
 
-## How to log in
+```powershell
+Get-FileHash .\ferrochat.exe -Algorithm SHA256
+```
 
-### The easy way: email and password
+Compare the hash shown with the one in `ferrochat.exe.sha256` from the same release.
 
-1. Open Ferrochat.
-2. Type your Discord email (or phone number) and password.
-3. Tick **Remember me** if you want to stay logged in.
-4. Click **Log in**.
-5. If you use two-factor login, type the 6-digit code from your authenticator
-   app (or a backup code) and click **Verify**.
+## Log in
 
-Your password goes straight to Discord and is never saved. If Discord asks for
-a captcha (it sometimes does for new logins), a small window opens with it:
-solve it and the login carries on. That window uses Windows' built-in Edge
-engine (WebView2) and only exists while the captcha is open. Two-factor by text message (SMS) isn't supported; use your authenticator app or
-a backup code.
+### Recommended: email and password
 
-### Using a token instead
+1. Open Ferrochat and enter your Discord email or phone number.
+2. Enter your password.
+3. Select **Remember me** if you want Ferrochat to keep you signed in.
+4. Select **Log in**.
+5. If asked, enter your authenticator code or a backup code.
 
-A token is a long code that acts like your password. Use one for bots, or when
-email login asks for a captcha.
+Your password is sent to Discord and is not saved by Ferrochat. If Discord asks for a captcha, solve it in the window that opens. SMS two-factor codes are not supported.
 
-> 🔒 **Never share your token.** Anyone who has it can use your account. If it
-> leaks, change your Discord password: the old token stops working.
+### Use a bot token
 
-### Token option A: your own account (spare account recommended)
+Discord permits bot accounts. A bot only sees servers where you add it. It has no friends list or DMs.
 
-1. Open <https://discord.com/app> in Chrome, Edge or Firefox and log in.
-2. Press **F12**. A panel opens.
-3. Click the **Network** tab at the top of that panel.
-4. In the panel's filter box, type `api`.
-5. Click any channel in Discord, so lines appear in the panel.
-6. Click one of the lines (for example `messages?limit=50`).
-7. On the right, open **Headers** and scroll to **Request Headers**.
-8. Find **Authorization**. Copy its value (a long code with two dots in it).
-9. Open Ferrochat, paste it into the **Token** box, tick **Remember me**, and
-   click **Log in with token**.
+1. Create an application in the [Discord Developer Portal](https://discord.com/developers/applications).
+2. Select **Bot** and enable **Message Content Intent** under **Privileged Gateway Intents**, then save.
+3. Select **Reset Token**, then copy the new token.
+4. Open **OAuth2 → URL Generator**. Select `bot`, then choose **View Channels**, **Send Messages**, and **Read Message History**.
+5. Open the generated link and add the bot to your server.
+6. In Ferrochat's token field, enter `Bot ` followed by your token, then select **Log in with token**.
 
-### Token option B: a bot (allowed by Discord)
+### Use your own account's token
 
-A bot is a separate account. It only sees servers you add it to, and has no
-friends or DMs.
+This method carries the same account risk described above. Use a spare account and never share the token. It works as a fallback if email login is blocked by a captcha.
 
-1. Open the [Developer Portal](https://discord.com/developers/applications)
-   and click **New Application**. Name it.
-2. Click **Bot** on the left.
-3. Under **Privileged Gateway Intents**, turn on **Message Content Intent**.
-   Click **Save**.
-4. Click **Reset Token**, then **Copy**.
-5. Click **OAuth2 → URL Generator** on the left. Tick `bot`, then tick
-   **View Channels**, **Send Messages** and **Read Message History**.
-6. Open the link at the bottom and pick your server.
-7. In Ferrochat, type `Bot `, a space, then paste the token:
-   `Bot MTIz...`. Click **Log in**.
+1. Sign in to [Discord in your browser](https://discord.com/app).
+2. Press **F12** and open the **Network** tab.
+3. Type `api` in the network filter, then click a channel.
+4. Select a request such as `messages?limit=50`.
+5. In **Headers**, find **Request Headers → Authorization** and copy its value.
+6. Paste the value into Ferrochat's **Token** field and select **Log in with token**.
 
-### Staying logged in
+A token grants access like a password. If it may have leaked, change your Discord password to invalidate it.
 
-- **Remember me** saves your token encrypted in Windows Credential Manager,
-  never in a file. Next time Ferrochat logs you in by itself.
-- **Settings → Log out** forgets it.
-- **Settings → Add another account** lets you switch between accounts.
+## Stay signed in
 
-### If it doesn't work
+- **Remember me** saves your token encrypted in Windows Credential Manager.
+- **Settings → Log out** removes the saved login.
+- **Settings → Add another account** lets you switch accounts.
 
-| Message | Fix |
+## Troubleshooting
+
+| What you see | What to try |
 |---|---|
-| `4004: Authentication failed` | Wrong or old token. Copy a fresh one. |
-| `4014: Disallowed intent(s)` | Bot only: do step 3 of Token option B. |
-| Asks for a captcha | Do that step (joining a server, adding a friend) in the browser. |
-| Stuck on "Connecting…" | Check your internet or firewall. |
+| `4004: Authentication failed` | Check the token and copy a fresh one if needed. |
+| `4014: Disallowed intent(s)` | For a bot, enable **Message Content Intent** in the Developer Portal. |
+| Login asks for a captcha | Complete the captcha. If it keeps appearing, try the requested action in Discord's browser app. |
+| Ferrochat stays on “Connecting…” | Check your internet connection and firewall. |
 
-## What it can do
+## Features
 
-- Servers, DMs, group DMs, friends, inbox
-- Replies, edits, reactions, pins, search, threads, forums, polls, stickers
-- Images, GIFs, pasting images with Ctrl+V, file uploads
-- Voice channels, watching streams and sharing your screen
-- Themes (9 built in, or your own `.css`), compact mode, tray icon
+- Servers, direct and group messages, friends, and inbox
+- Replies, edits, reactions, pins, search, threads, forums, polls, and stickers
+- Images, GIFs, file uploads, and pasting images with Ctrl+V
+- Voice channels, screen sharing, and watching streams
+- Nine built-in themes, custom themes, compact mode, and a notification-area icon
 
-Heavy features can be switched off in **Settings → Performance** to save more
-memory.
+Turn off features you do not need under **Settings → Performance** to save memory.
 
 ## Known limits
 
-- Voice, video and screen share are new and not fully tested on live calls.
-- Video attachments open in the browser.
-- Windows only.
+- Voice, video, and screen sharing have not been fully tested in live calls.
+- Video attachments open in your browser.
+- Ferrochat runs on Windows only.
 
-## Build it yourself
+## Build from source
 
-You need [Rust](https://rustup.rs) and Visual Studio's C++ build tools (with the
-Windows SDK). Then:
+Install [Rust](https://rustup.rs) and the C++ build tools from Visual Studio with the Windows SDK. Then run:
 
-```bash
+```powershell
 cargo build --release
 ```
 
-The exe lands in `target/release/ferrochat.exe`. If `link.exe` isn't found,
-run the command from the "x64 Native Tools Command Prompt" that comes with
-Visual Studio.
+The executable is created at `target/release/ferrochat.exe`. If the build cannot find `link.exe`, use Visual Studio's **x64 Native Tools Command Prompt**.
 
 ## License
 
