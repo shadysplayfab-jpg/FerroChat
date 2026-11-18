@@ -11,7 +11,7 @@ Ferrochat is developed with Codex, OpenAI's coding agent, under the direction an
 ## Download
 
 1. Open [Ferrochat Releases](https://github.com/shadysplayfab-jpg/FerroChat/releases).
-2. Download `ferrochat.exe` from the latest release. The current release is **v0.3.1**.
+2. Download `ferrochat.exe` from the latest release. The current release is **v0.3.2**.
 3. Open the file. If Windows shows a security warning, the app is unsigned. Click **More info → Run anyway** if you choose to continue.
 
 Ferrochat needs 64-bit Windows 10 or 11. There is nothing to install.

@@ -114,14 +114,8 @@ impl Rest {
             Some(guild_id) => format!("{API}/guilds/{guild_id}/messages/search"),
             None => format!("{API}/channels/{channel_id}/messages/search"),
         };
-        let response = self
-            .http
-            .get(url)
-            .query(&[("content", query.as_str())])
-            .header("Authorization", &self.auth)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
+        let request = self.http.get(url).query(&[("content", query.as_str())]).header("Authorization", &self.auth);
+        let response = send_with_rate_limit(&self.http, request).await?;
         // 202: Discord is still indexing this server.
         if response.status() == StatusCode::ACCEPTED {
             return Err("Discord is still indexing this server; try again in a few seconds.".to_owned());
@@ -283,12 +277,10 @@ impl Rest {
         } else {
             self.http.get(format!("{API}/gifs/search")).query(&[("q", query.as_str())])
         };
-        let response = request
+        let request = request
             .query(&[("media_format", "gif"), ("provider", "tenor"), ("locale", "en-US")])
-            .header("Authorization", &self.auth)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
+            .header("Authorization", &self.auth);
+        let response = send_with_rate_limit(&self.http, request).await?;
         parse(response).await
     }
 
@@ -300,12 +292,11 @@ impl Rest {
     /// Any other API call, by method and path below `/api/v10`. Returns the JSON
     /// answer, or `Null` for an empty one (204).
     pub async fn call(self, method: Method, path: String, body: Option<Value>) -> Result<Value, String> {
-        let retry = method == Method::GET;
         let mut request = self.http.request(method, format!("{API}{path}")).header("Authorization", &self.auth);
         if let Some(body) = body {
             request = request.json(&body);
         }
-        let response = check(send_with_rate_limit(request, retry).await?).await?;
+        let response = check(send_with_rate_limit(&self.http, request).await?).await?;
         let bytes = response.bytes().await.map_err(|e| e.to_string())?;
         if bytes.is_empty() {
             return Ok(Value::Null);
@@ -617,26 +608,36 @@ async fn parse<T: DeserializeOwned>(response: Response) -> Result<T, String> {
     check(response).await?.json().await.map_err(|e| e.to_string())
 }
 
-async fn send_with_rate_limit(request: reqwest::RequestBuilder, retry: bool) -> Result<Response, String> {
-    if !retry {
-        return request.send().await.map_err(|e| e.to_string());
-    }
-    let mut attempts = 0;
+async fn send_with_rate_limit(client: &Client, request: reqwest::RequestBuilder) -> Result<Response, String> {
+    const MAX_RETRIES: usize = 2;
+    const MAX_RETRY_DELAY: f64 = 60.0;
+
+    let request = request.build().map_err(|error| error.to_string())?;
+    let retryable = request.method() == Method::GET;
+    let retry_request = retryable.then(|| request.try_clone()).flatten();
+    let mut first_request = Some(request);
+    let mut retries = 0;
     loop {
-        let next = request.try_clone().ok_or("request cannot be retried")?;
-        let response = next.send().await.map_err(|e| e.to_string())?;
-        if !retry || response.status() != StatusCode::TOO_MANY_REQUESTS || attempts >= 2 {
+        let next = first_request.take().or_else(|| retry_request.as_ref().and_then(reqwest::Request::try_clone));
+        let Some(next) = next else { return Err("GET request cannot be retried".to_owned()) };
+        let response = client.execute(next).await.map_err(|error| error.to_string())?;
+        if !retryable || response.status() != StatusCode::TOO_MANY_REQUESTS || retries >= MAX_RETRIES {
             return Ok(response);
         }
         let delay = response
             .headers()
             .get("Retry-After")
+            .or_else(|| response.headers().get("X-RateLimit-Reset-After"))
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.parse::<f64>().ok())
-            .filter(|seconds| seconds.is_finite() && *seconds >= 0.0 && *seconds <= 60.0);
+            .filter(|seconds| seconds.is_finite() && *seconds >= 0.0 && *seconds <= MAX_RETRY_DELAY);
         let Some(seconds) = delay else { return Ok(response) };
+        if retry_request.is_none() {
+            return Ok(response);
+        }
+        drop(response);
         tokio::time::sleep(Duration::from_secs_f64(seconds)).await;
-        attempts += 1;
+        retries += 1;
     }
 }
 
