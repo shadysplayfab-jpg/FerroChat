@@ -2,13 +2,13 @@
 
 # Ferrochat
 
-A lightweight Discord client for Windows, written in Rust.
+A lightweight, native Discord client for Windows, written in Rust.
 
 It's a real native app, not a web browser in disguise like the official one, so
 it uses far less memory: about 60–100 MB with the GPU renderer off.
 
-> 🤖 Ferrochat was written by Claude, Anthropic's AI coding agent. A person
-> decided what it should do and tested it.
+Ferrochat is developed with Codex, OpenAI's coding agent, under the direction
+and testing of the project maintainer.
 
 > ⚠️ **Account risk:** Discord's rules forbid third-party clients on normal
 > accounts, and accounts can be banned for it. Use a spare account, or a bot
@@ -17,11 +17,17 @@ it uses far less memory: about 60–100 MB with the GPU renderer off.
 ## Download
 
 1. Go to [Releases](https://github.com/shadysplayfab-jpg/FerroChat/releases)
-   and download `ferrochat.exe`.
+   and download `ferrochat.exe`. The current release is **v0.3.1**.
 2. Double-click it. If Windows shows "Windows protected your PC", click
    **More info → Run anyway**. (The exe isn't code-signed.)
 
 That's it. Nothing to install. Needs 64-bit Windows 10 or 11.
+
+### Verify the download
+
+Each release includes a SHA-256 checksum file. In PowerShell, run
+`Get-FileHash .\ferrochat.exe -Algorithm SHA256` and compare its hash with
+`ferrochat.exe.sha256` from the same release.
 
 ## How to log in
 
