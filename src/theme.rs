@@ -8,8 +8,7 @@
 
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicPtr, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{LazyLock, Mutex, RwLock};
 
 use iced::widget::image::Handle;
 use iced::Color;
@@ -306,11 +305,8 @@ fn build_with(theme: ThemeName, accent: Color) -> Palette {
     palette
 }
 
-const COMBINATIONS: usize = ThemeName::ALL.len() * Accent::ALL.len();
-static PALETTES: OnceLock<[Palette; COMBINATIONS]> = OnceLock::new();
-/// The active palette: a built-in one, or a leaked custom one (a few hundred
-/// bytes per theme change, so the view can borrow it for `'static`).
-static CURRENT: AtomicPtr<Palette> = AtomicPtr::new(std::ptr::null_mut());
+static CURRENT: LazyLock<RwLock<Palette>> =
+    LazyLock::new(|| RwLock::new(build_with(ThemeName::default(), Accent::default().color())));
 static WALLPAPER: Mutex<Option<Wallpaper>> = Mutex::new(None);
 
 #[derive(Debug, Clone)]
@@ -319,25 +315,9 @@ pub struct Wallpaper {
     pub opacity: f32,
 }
 
-fn index(theme: ThemeName, accent: Accent) -> usize {
-    ThemeName::ALL.iter().position(|t| *t == theme).unwrap_or(0) * Accent::ALL.len()
-        + Accent::ALL.iter().position(|a| *a == accent).unwrap_or(0)
-}
-
-fn palettes() -> &'static [Palette; COMBINATIONS] {
-    PALETTES.get_or_init(|| {
-        std::array::from_fn(|i| build_with(ThemeName::ALL[i / Accent::ALL.len()], Accent::ALL[i % Accent::ALL.len()].color()))
-    })
-}
-
-/// The active palette.
-pub fn p() -> &'static Palette {
-    let current = CURRENT.load(Ordering::Acquire);
-    if current.is_null() {
-        return &palettes()[0];
-    }
-    // Only ever points at the static table or a leaked (never freed) palette.
-    unsafe { &*current }
+/// A snapshot of the active palette, including custom theme overrides.
+pub fn p() -> Palette {
+    *CURRENT.read().unwrap_or_else(|error| error.into_inner())
 }
 
 /// The wallpaper behind the chat, if the custom theme has one.
@@ -345,8 +325,8 @@ pub fn wallpaper() -> Option<Wallpaper> {
     WALLPAPER.lock().ok()?.clone()
 }
 
-fn activate(palette: &'static Palette, name: String) -> iced::Theme {
-    CURRENT.store(palette as *const Palette as *mut Palette, Ordering::Release);
+fn activate(palette: Palette, name: String) -> iced::Theme {
+    *CURRENT.write().unwrap_or_else(|error| error.into_inner()) = palette;
     iced::Theme::custom(
         name,
         iced::theme::Palette {
@@ -364,7 +344,7 @@ pub fn set(theme: ThemeName, accent: Accent) -> iced::Theme {
     if let Ok(mut wallpaper) = WALLPAPER.lock() {
         *wallpaper = None;
     }
-    activate(&palettes()[index(theme, accent)], format!("Ferrochat {theme} {accent}"))
+    activate(build_with(theme, accent.color()), format!("Ferrochat {theme} {accent}"))
 }
 
 /// Folder of custom themes; `None` if Windows has no app-data folder.
@@ -425,8 +405,7 @@ pub fn set_custom(name: &str, accent: Accent) -> Result<(iced::Theme, Vec<String
     if let Ok(mut current) = WALLPAPER.lock() {
         *current = wallpaper;
     }
-    let palette: &'static Palette = Box::leak(Box::new(sheet.palette));
-    Ok((activate(palette, format!("Ferrochat custom {name}")), sheet.warnings))
+    Ok((activate(sheet.palette, format!("Ferrochat custom {name}")), sheet.warnings))
 }
 
 /// A parsed custom theme.
@@ -622,7 +601,7 @@ mod tests {
     fn every_combination_has_its_own_palette() {
         for theme in ThemeName::ALL {
             for accent in Accent::ALL {
-                let palette = &palettes()[index(theme, accent)];
+                let palette = build_with(theme, accent.color());
                 assert_eq!(palette.accent, accent.color());
                 assert_eq!(palette.text == Color::WHITE, matches!(theme, ThemeName::HighContrast));
             }

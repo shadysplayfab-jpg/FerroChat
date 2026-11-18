@@ -66,6 +66,11 @@ pub struct PasswordForm {
     pub busy: bool,
 }
 
+fn brand_icon() -> image::Handle {
+    static LOGO: std::sync::OnceLock<image::Handle> = std::sync::OnceLock::new();
+    LOGO.get_or_init(|| image::Handle::from_bytes(&include_bytes!("../assets/icon.png")[..])).clone()
+}
+
 pub fn login<'a>(token: &'a str, form: &'a PasswordForm, error: Option<&'a str>, settings: &'a Settings) -> Element<'a, Msg> {
     let remember = settings.remember_login;
     let note = if remember {
@@ -73,22 +78,24 @@ pub fn login<'a>(token: &'a str, form: &'a PasswordForm, error: Option<&'a str>,
     } else {
         "Your login is kept in memory only and never written to disk."
     };
-    let wide = |label: &'static str, busy: bool, msg: Msg| {
+    let wide = |label: &'static str, busy: bool, enabled: bool, msg: Msg| {
         let label = if busy { "Logging in…" } else { label };
-        button(container(text(label).font(BOLD)).center_x(Length::Fill)).width(Length::Fill).on_press_maybe((!busy).then_some(msg)).padding(10)
+        button(container(text(label).font(BOLD)).center_x(Length::Fill)).width(Length::Fill).on_press_maybe((enabled && !busy).then_some(msg)).padding(10)
     };
-    let mut fields = column![text("Ferrochat").size(32).font(BOLD).color(p().accent)].spacing(14).width(380);
+    let brand = row![image(brand_icon()).width(40).height(40), text("Ferrochat").size(30).font(BOLD)]
+        .spacing(12).align_y(Alignment::Center);
+    let mut fields = column![brand].spacing(12).width(Length::Fill).max_width(400);
     fields = if form.ticket.is_some() {
         fields
             .push(text("Two-factor login: enter the 6-digit code from your authenticator app (or a backup code).").size(14).color(p().muted))
             .push(text_input("Code", &form.code).on_input(Msg::LoginCode).on_submit(Msg::PasswordLogin).padding(12))
-            .push(wide("Verify", form.busy, Msg::PasswordLogin))
+            .push(wide("Verify", form.busy, !form.code.trim().is_empty(), Msg::PasswordLogin))
     } else {
         fields
             .push(text("Log in with your Discord account.").size(14).color(p().muted))
             .push(text_input("Email or phone number", &form.email).on_input(Msg::LoginEmail).on_submit(Msg::PasswordLogin).padding(12))
             .push(text_input("Password", &form.password).on_input(Msg::LoginPassword).on_submit(Msg::PasswordLogin).secure(true).padding(12))
-            .push(wide("Log in", form.busy, Msg::PasswordLogin))
+            .push(wide("Log in", form.busy, !form.email.trim().is_empty() && !form.password.is_empty(), Msg::PasswordLogin))
     };
     if let Some(error) = error {
         fields = fields.push(text(error).size(13).color(p().error));
@@ -98,9 +105,10 @@ pub fn login<'a>(token: &'a str, form: &'a PasswordForm, error: Option<&'a str>,
         .push(text(note).size(12).color(p().muted))
         .push(text("Third-party clients are against Discord's rules: use a spare account.").size(12).color(p().muted))
         .push(rule())
-        .push(section_label("Or paste a token (bots, or if login asks for a captcha)"))
+        .push(section_label("Token login"))
         .push(text_input("Token", token).on_input(Msg::TokenChanged).on_submit(Msg::Login).secure(true).padding(12))
-        .push(wide("Log in with token", false, Msg::Login));
+        .push(button(container(text("Log in with token")).center_x(Length::Fill))
+            .style(quiet).padding(10).width(Length::Fill).on_press_maybe((!token.trim().is_empty()).then_some(Msg::Login)));
     if !settings.accounts.is_empty() {
         let mut saved = column![section_label("Saved accounts")].spacing(6);
         for account in &settings.accounts {
@@ -114,8 +122,9 @@ pub fn login<'a>(token: &'a str, form: &'a PasswordForm, error: Option<&'a str>,
         }
         form = form.push(rule()).push(saved);
     }
-    let card = container(form).padding(32).style(fill(p().sidebar, 14.0));
-    container(card).center(Length::Fill).style(fill(p().rail, 0.0)).into()
+    let card = container(form).padding(24).max_width(448).style(bordered(p().sidebar, 14.0));
+    let page = container(card).padding(16).center_x(Length::Fill);
+    container(thin_scroll(page)).center(Length::Fill).style(fill(p().rail, 0.0)).into()
 }
 
 /// "System default" first, then the devices; picking it stores `None`.
@@ -285,10 +294,10 @@ pub fn settings_panel<'a>(
     };
 
     let card = |title: &'static str, content: Column<'a, Msg>| {
-        container(column![section(title), content.spacing(10)].spacing(12))
+        container(column![section(title), rule(), content.spacing(12)].spacing(12))
             .padding(18)
             .width(Length::Fill)
-            .style(fill(p().sidebar, 10.0))
+            .style(bordered(p().sidebar, 10.0))
     };
     let mut account = column![toggle(
         "Remember me on this PC (Windows Credential Manager)",
@@ -319,12 +328,12 @@ pub fn settings_panel<'a>(
         );
     }
 
-    let panel = column![
-        row![
+    let heading = row![
             text("Settings").size(26).font(BOLD).width(Length::Fill),
             button(text("Close")).padding([6, 16]).on_press(Msg::ToggleSettings).style(quiet),
         ]
-        .align_y(Alignment::Center),
+        .align_y(Alignment::Center);
+    let panel = column![
         card("Account", account),
         card(
             "Notifications",
@@ -416,14 +425,14 @@ pub fn settings_panel<'a>(
     .spacing(16)
     .max_width(640);
     let centered = container(panel).center_x(Length::Fill).padding([32, 24]);
-    container(thin_scroll(centered)).height(Length::Fill).style(fill(p().chat, 0.0)).into()
+    let heading = container(container(heading).max_width(640)).padding([12, 24]).center_x(Length::Fill);
+    container(column![heading, rule(), thin_scroll(centered).height(Length::Fill)])
+        .height(Length::Fill).style(fill(p().chat, 0.0)).into()
 }
 
 impl Session {
     /// The start-up screen: logo, the real loading steps, and a fun fact.
     fn loading_view(&self, loading: &crate::session::Loading) -> Element<'_, Msg> {
-        static LOGO: std::sync::OnceLock<image::Handle> = std::sync::OnceLock::new();
-        let logo = LOGO.get_or_init(|| image::Handle::from_bytes(&include_bytes!("../assets/icon.png")[..]));
         let ready = loading.ready_at.is_some();
         let icons = self.icons_progress();
         // ✓ done, ● working on it, ○ not yet.
@@ -451,7 +460,7 @@ impl Session {
         let offset = std::process::id() as usize;
         let fact = crate::session::FUN_FACTS[(offset + (loading.started.elapsed().as_secs() / 6) as usize) % crate::session::FUN_FACTS.len()];
         let mut card = column![
-            image(logo.clone()).width(64).height(64),
+            image(brand_icon()).width(64).height(64),
             text("Ferrochat").size(28).font(BOLD).color(p().accent),
             progress_bar(0.0..=1.0, progress).height(6).width(320),
             steps,
@@ -479,6 +488,57 @@ impl Session {
         if let Some(loading) = &self.loading {
             return self.loading_view(loading);
         }
+        let layout = if self.compact_window() {
+            self.compact_layout()
+        } else {
+            self.wide_layout()
+        };
+        let mut layers = stack![layout];
+        if let Some(query) = &self.switcher {
+            layers = layers.push(self.switcher_view(query));
+        }
+        if let Some(dialog) = self.dialog_overlay() {
+            layers = layers.push(dialog);
+        }
+        if let Some(menu) = self.menu_overlay() {
+            layers = layers.push(menu);
+        }
+        crate::pointer::pointer(layers, |at, window| Msg::Social(SocialMsg::Pointer(at, window))).into()
+    }
+
+    fn sidebar_width(&self, wide: f32) -> Length {
+        if self.compact_window() { Length::Fill } else { Length::Fixed(wide) }
+    }
+
+    fn compact_layout(&self) -> Element<'_, Msg> {
+        use crate::session::CompactPane::{Browse, Call, Chat, Members};
+        let voice = self.in_voice_view();
+        let members = self.settings.member_list && self.selected_guild.is_some() && self.selected_channel.is_some() && !voice;
+        let pane = match self.compact_pane {
+            Call if !voice => Chat,
+            Members if !members => Chat,
+            pane => pane,
+        };
+        let mut tabs = Row::new().padding([6, 10]).spacing(6);
+        let tab = |name, target| small_button(name, pane == target && self.panel.is_none(), Msg::CompactPane(target));
+        tabs = tabs.push(tab("Browse", Browse)).push(tab("Chat", Chat));
+        if voice {
+            tabs = tabs.push(tab("Call", Call));
+        }
+        if members {
+            tabs = tabs.push(tab("Members", Members));
+        }
+        let body = match (pane, &self.panel) {
+            (_, Some(panel)) => self.side_panel(panel),
+            (Browse, _) => row![self.guild_rail(), self.channel_list()].into(),
+            (Call, _) => self.voice_stage_view(self.selected_channel.as_deref().unwrap_or_default()),
+            (Members, _) => self.member_panel(),
+            _ => self.chat(),
+        };
+        column![tabs.wrap(), rule(), body].width(Length::Fill).height(Length::Fill).into()
+    }
+
+    fn wide_layout(&self) -> Element<'_, Msg> {
         let mut layout = row![self.guild_rail(), self.channel_list()];
         match self.selected_channel.as_deref() {
             // A voice channel: the call's tiles, with its text chat beside them.
@@ -499,17 +559,7 @@ impl Session {
                 }
             }
         }
-        let mut layers = stack![layout];
-        if let Some(query) = &self.switcher {
-            layers = layers.push(self.switcher_view(query));
-        }
-        if let Some(dialog) = self.dialog_overlay() {
-            layers = layers.push(dialog);
-        }
-        if let Some(menu) = self.menu_overlay() {
-            layers = layers.push(menu);
-        }
-        crate::pointer::pointer(layers, |at, window| Msg::Social(SocialMsg::Pointer(at, window))).into()
+        layout.into()
     }
 
     /// Right-click opens `target`'s menu.
@@ -729,7 +779,7 @@ impl Session {
 
         let menu: Element<'_, Msg> = if self.status_menu { self.status_menu_view() } else { Space::new(0, 0).into() };
         container(column![top, thin_scroll(list).height(Length::Fill), self.voice_panel(), menu, self.user_panel()])
-            .width(240)
+            .width(self.sidebar_width(240.0))
             .height(Length::Fill)
             .style(fill(p().sidebar, 0.0))
             .into()
@@ -1015,7 +1065,7 @@ impl Session {
         } else {
             container(Space::new(1, 18)).style(fill(p().selected, 0.0)).into()
         };
-        let mut header = row![
+        let title_row = row![
             label(title.clone()).size(16).font(BOLD),
             divider,
             // One line, cut off at the buttons; the full topic is in the tooltip.
@@ -1031,6 +1081,7 @@ impl Session {
         .spacing(10)
         .padding([12, 16])
         .align_y(Alignment::Center);
+        let mut actions = Row::new().spacing(5).align_y(Alignment::Center);
         if !self.is_bot() && !narrow {
             // One picker for mute and notification level keeps the header short.
             let choices: Vec<ChannelChoice> = match self.selected_guild {
@@ -1052,19 +1103,27 @@ impl Session {
             })
             .text_size(12)
             .padding([4, 8]);
-            header = header.push(tooltip(picker, tip("Notifications for this channel"), tooltip::Position::Bottom));
+            actions = actions.push(tooltip(picker, tip("Notifications for this channel"), tooltip::Position::Bottom));
         }
         let panel_open = |check: fn(&Panel) -> bool| self.panel.as_ref().is_some_and(check);
         if !narrow {
-            header = header
+            actions = actions
                 .push(small_button("Pins", panel_open(|p| matches!(p, Panel::Pins(_))), Msg::ShowPins))
                 .push(small_button("Search", panel_open(|p| matches!(p, Panel::Search(_))), Msg::OpenSearch));
         }
-        if self.selected_guild.is_some() && self.settings.member_list && !narrow {
+        if self.selected_guild.is_some() && self.settings.member_list && !narrow && !self.compact_window() {
             let showing = self.show_members && self.panel.is_none();
-            header = header.push(small_button("Members", showing, Msg::ToggleMembers));
+            actions = actions.push(small_button("Members", showing, Msg::ToggleMembers));
         }
-        let header = column![header, rule()];
+        let mut header = Column::new();
+        if narrow {
+            header = header.push(title_row);
+        } else if self.window.width < 1100.0 || self.panel.is_some() || self.show_members {
+            header = header.push(title_row).push(container(actions.wrap()).padding([4, 12]));
+        } else {
+            header = header.push(row![title_row.width(Length::Fill), container(actions).padding([0, 12])].align_y(Alignment::Center));
+        }
+        let header = header.push(rule());
 
         if self.channel(channel_id).is_some_and(Channel::is_forum) {
             return container(column![header, self.forum_view(channel_id)])
@@ -1153,14 +1212,18 @@ impl Session {
             .style(|theme, status| {
                 let mut style = text_input::default(theme, status);
                 style.background = Background::Color(Color::TRANSPARENT);
-                style.border = Border::default();
+                style.border = Border {
+                    width: if matches!(status, text_input::Status::Focused) { 1.0 } else { 0.0 },
+                    color: p().accent,
+                    radius: 6.0.into(),
+                };
                 style.placeholder = p().muted;
                 style.value = p().text;
                 style.selection = Color { a: 0.35, ..p().accent };
                 style
             });
         // Quiet icon button; the text field is the hero, not the attach glyph.
-        let attach = button(container(text("+").size(20).color(p().muted)).center(Length::Fill))
+        let attach = button(container(text("+").size(20)).center(Length::Fill))
             .width(36)
             .height(44)
             .padding(0)
@@ -1178,7 +1241,7 @@ impl Session {
         let mut tools = Row::new().spacing(4).align_y(Alignment::Center);
         if can_send {
             if self.can_attach(channel_id) {
-                tools = tools.push(attach);
+                tools = tools.push(tooltip(attach, tip("Attach a file"), tooltip::Position::Top));
             }
             tools = tools.push(composer);
         } else {
@@ -1269,7 +1332,7 @@ impl Session {
                 }
             }
         }
-        container(thin_scroll(list)).width(220).height(Length::Fill).style(fill(p().sidebar, 0.0)).into()
+        container(thin_scroll(list)).width(self.sidebar_width(220.0)).height(Length::Fill).style(fill(p().sidebar, 0.0)).into()
     }
 
     fn member_row<'a>(&'a self, member: &'a crate::discord::member_list::Member) -> Element<'a, Msg> {
@@ -1320,7 +1383,7 @@ impl Session {
         let heading = row![label(title).size(14).font(BOLD).width(Length::Fill), close].align_y(Alignment::Center);
         container(column![heading, thin_scroll(content).height(Length::Fill)].spacing(12))
             .padding(12)
-            .width(300)
+            .width(self.sidebar_width(300.0))
             .height(Length::Fill)
             .style(fill(p().sidebar, 0.0))
             .into()
@@ -1475,7 +1538,11 @@ impl Session {
     fn avatar(&self, user: &User, size: f32) -> Element<'static, Msg> {
         match self.images.get(&self.avatar_url(user)) {
             Some(handle) => image(handle.clone()).width(size).height(size).into(),
-            None => container(Space::new(size, size)).style(fill(p().selected, size / 2.0)).into(),
+            None => {
+                let letters: String = initials(user.display_name()).chars().take(2).collect();
+                container(label(letters).size(size * 0.38).font(BOLD).color(p().pill_fg))
+                    .center(size).style(fill(p().pill_bg, size / 2.0)).into()
+            }
         }
     }
 
@@ -1560,7 +1627,7 @@ impl Session {
         }
         let compact = self.settings.compact;
         // The name opens the author's profile.
-        let author = button(label(message.author.display_name()).font(BOLD).color(p().accent))
+        let author = button(label(message.author.display_name()).font(BOLD).color(p().pill_fg))
             .padding(0)
             .style(button::text)
             .on_press(Msg::ShowProfile(message.author.clone()));
@@ -2493,24 +2560,7 @@ fn composer_tool(name: &str, on: bool, msg: Msg) -> Element<'_, Msg> {
     button(container(text(name).size(12)).center_y(Length::Fill))
         .height(44)
         .padding([0, 10])
-        .style(move |theme, status| {
-            let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-            let mut style = button::text(theme, status);
-            style.text_color = if on || hovered { p().text } else { p().muted };
-            style.background = if on {
-                Some(Background::Color(p().pill_bg))
-            } else if hovered {
-                Some(Background::Color(p().selected))
-            } else {
-                None
-            };
-            style.border = Border {
-                color: if on { p().accent } else { Color::TRANSPARENT },
-                width: if on { 1.0 } else { 0.0 },
-                radius: 6.0.into(),
-            };
-            style
-        })
+        .style(toggle_style(on))
         .on_press(msg)
         .into()
 }
@@ -2627,7 +2677,7 @@ fn tip<'a>(content: impl text::IntoFragment<'a>) -> Element<'a, Msg> {
 
 /// Small quiet label above a block of content.
 fn section_label(name: &str) -> Element<'_, Msg> {
-    text(name).size(11).color(p().muted).into()
+    text(name).size(12).font(BOLD).color(p().muted).into()
 }
 
 /// A header-sized toggle button. Off: text-style muted with a subtle hover fill.
@@ -2635,26 +2685,23 @@ fn section_label(name: &str) -> Element<'_, Msg> {
 fn small_button(name: &str, on: bool, msg: Msg) -> Element<'_, Msg> {
     button(text(name).size(12))
         .padding([4, 10])
-        .style(move |theme, status| {
-            let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-            let mut style = button::text(theme, status);
-            style.text_color = if on || hovered { p().text } else { p().muted };
-            style.background = if on {
-                Some(Background::Color(p().pill_bg))
-            } else if hovered {
-                Some(Background::Color(p().selected))
-            } else {
-                None
-            };
-            style.border = Border {
-                color: if on { p().accent } else { Color::TRANSPARENT },
-                width: if on { 1.0 } else { 0.0 },
-                radius: 6.0.into(),
-            };
-            style
-        })
+        .style(toggle_style(on))
         .on_press(msg)
         .into()
+}
+
+fn toggle_style(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |theme, status| {
+        let mut style = subtle(theme, status);
+        if selected {
+            style.background = Some(Background::Color(p().pill_bg));
+            style.text_color = p().pill_fg;
+            style.border = Border { color: p().accent, width: 1.0, radius: 6.0.into() };
+        } else if matches!(status, button::Status::Active) {
+            style.text_color = p().muted;
+        }
+        style
+    }
 }
 
 /// A colour `amount` of the way from `from` towards `to`.

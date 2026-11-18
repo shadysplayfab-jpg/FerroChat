@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use reqwest::multipart::{Form, Part};
 pub use reqwest::Method;
 use reqwest::{Client, Response, StatusCode};
+use std::time::Duration;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -61,6 +62,7 @@ pub const MAX_AUDIO_BYTES: usize = 25 * 1024 * 1024;
 #[derive(Clone)]
 pub struct Rest {
     http: Client,
+    media: Result<Client, String>,
     auth: String,
 }
 
@@ -71,7 +73,19 @@ impl Rest {
             .user_agent(concat!("ferrochat/", env!("CARGO_PKG_VERSION")))
             .build()
             .unwrap_or_else(|_| Client::new());
-        Self { http, auth: token.to_owned() }
+        // Media requests never carry the account token or follow redirects off the allowlist.
+        let media = Client::builder()
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() < 5 && crate::images::allowed_media_url(attempt.url()) {
+                    attempt.follow()
+                } else {
+                    attempt.stop()
+                }
+            }))
+            .timeout(Duration::from_secs(45))
+            .build()
+            .map_err(|error| error.to_string());
+        Self { http, media, auth: token.to_owned() }
     }
 
     /// Up to [`PAGE_SIZE`] messages at `cursor`, oldest first.
@@ -286,11 +300,12 @@ impl Rest {
     /// Any other API call, by method and path below `/api/v10`. Returns the JSON
     /// answer, or `Null` for an empty one (204).
     pub async fn call(self, method: Method, path: String, body: Option<Value>) -> Result<Value, String> {
+        let retry = method == Method::GET;
         let mut request = self.http.request(method, format!("{API}{path}")).header("Authorization", &self.auth);
         if let Some(body) = body {
             request = request.json(&body);
         }
-        let response = check(request.send().await.map_err(|e| e.to_string())?).await?;
+        let response = check(send_with_rate_limit(request, retry).await?).await?;
         let bytes = response.bytes().await.map_err(|e| e.to_string())?;
         if bytes.is_empty() {
             return Ok(Value::Null);
@@ -320,15 +335,13 @@ impl Rest {
 
     /// A file of at most `max` bytes, fetched without the token.
     async fn download(self, url: String, max: usize, too_large: &'static str) -> Result<Vec<u8>, String> {
-        let response = check(self.http.get(url).send().await.map_err(|e| e.to_string())?).await?;
-        if response.content_length().is_some_and(|n| n > max as u64) {
-            return Err(too_large.to_owned());
+        let url = reqwest::Url::parse(&url).map_err(|_| "Invalid media URL")?;
+        if !crate::images::allowed_media_url(&url) {
+            return Err("Unsupported media host".to_owned());
         }
-        let bytes = response.bytes().await.map_err(|e| e.to_string())?;
-        if bytes.len() > max {
-            return Err(too_large.to_owned());
-        }
-        Ok(bytes.to_vec())
+        let client = self.media.as_ref().map_err(Clone::clone)?;
+        let response = client.get(url).send().await.map_err(|e| e.without_url().to_string())?;
+        read_media(response, max, too_large).await
     }
 
     /// Shows our typing indicator for ~10 seconds.
@@ -604,6 +617,46 @@ async fn parse<T: DeserializeOwned>(response: Response) -> Result<T, String> {
     check(response).await?.json().await.map_err(|e| e.to_string())
 }
 
+async fn send_with_rate_limit(request: reqwest::RequestBuilder, retry: bool) -> Result<Response, String> {
+    if !retry {
+        return request.send().await.map_err(|e| e.to_string());
+    }
+    let mut attempts = 0;
+    loop {
+        let next = request.try_clone().ok_or("request cannot be retried")?;
+        let response = next.send().await.map_err(|e| e.to_string())?;
+        if !retry || response.status() != StatusCode::TOO_MANY_REQUESTS || attempts >= 2 {
+            return Ok(response);
+        }
+        let delay = response
+            .headers()
+            .get("Retry-After")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<f64>().ok())
+            .filter(|seconds| seconds.is_finite() && *seconds >= 0.0 && *seconds <= 60.0);
+        let Some(seconds) = delay else { return Ok(response) };
+        tokio::time::sleep(Duration::from_secs_f64(seconds)).await;
+        attempts += 1;
+    }
+}
+
+async fn read_media(mut response: Response, max: usize, too_large: &str) -> Result<Vec<u8>, String> {
+    if !response.status().is_success() {
+        return Err(format!("Media download returned HTTP {}", response.status()));
+    }
+    if response.content_length().is_some_and(|n| n > max as u64) {
+        return Err(too_large.to_owned());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.without_url().to_string())? {
+        if chunk.len() > max - bytes.len() {
+            return Err(too_large.to_owned());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
 async fn check(response: Response) -> Result<Response, String> {
     let status = response.status();
     if status.is_success() {
@@ -620,6 +673,34 @@ async fn check(response: Response) -> Result<Response, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn media_limit_applies_to_chunked_bodies() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut headers = BufReader::new(&mut stream).lines();
+                while headers.next_line().await.unwrap().is_some_and(|line| !line.is_empty()) {}
+                stream.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n2\r\nab\r\n2\r\ncd\r\n0\r\n\r\n").await.unwrap();
+            }
+        });
+        let client = Client::builder().no_proxy().timeout(Duration::from_secs(5)).build().unwrap();
+        for limit in [4, 3] {
+            let response = client.get(format!("http://{address}/")).send().await.unwrap();
+            let result = read_media(response, limit, "too large").await;
+            if limit == 4 {
+                assert_eq!(result.unwrap(), b"abcd");
+            } else {
+                assert_eq!(result.unwrap_err(), "too large");
+            }
+        }
+        server.await.unwrap();
+    }
 
     #[test]
     fn login_errors_are_explained() {

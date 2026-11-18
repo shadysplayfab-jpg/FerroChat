@@ -27,6 +27,8 @@ pub enum Shape {
     Animated { round: bool },
 }
 
+/// Up to 64 MiB of RGBA pixels per still preview.
+const MAX_STILL_PIXELS: u64 = 4096 * 4096;
 /// Round images are decoded for masking; refuse anything larger than this.
 const MAX_ROUND_SIDE: u32 = 512;
 /// Animations larger than these keep only their first frame.
@@ -237,11 +239,18 @@ fn decode(bytes: Vec<u8>, shape: Shape) -> Option<(State, usize)> {
 /// GIF frames as RGBA (masked round if asked). `None` for non-GIFs, single
 /// frames and animations over the limits, which are then shown as stills.
 fn animation(bytes: &[u8], round: bool) -> Option<(State, usize)> {
-    use image::AnimationDecoder;
+    use image::{AnimationDecoder, ImageDecoder};
     if bytes.len() > MAX_IMAGE_BYTES || image::guess_format(bytes).ok()? != image::ImageFormat::Gif {
         return None;
     }
-    let decoder = image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).ok()?;
+    let mut decoder = image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).ok()?;
+    let (width, height) = decoder.dimensions();
+    if width.max(height) > MAX_ANIMATION_SIDE {
+        return None;
+    }
+    let mut limits = image::io::Limits::default();
+    limits.max_alloc = Some(MAX_ANIMATION_BYTES as u64);
+    decoder.set_limits(limits).ok()?;
     let mut frames = Vec::new();
     let mut cost = bytes.len();
     for frame in decoder.into_frames().take(MAX_FRAMES + 1) {
@@ -284,7 +293,15 @@ fn decoded_cost(bytes: &[u8]) -> Option<usize> {
         .ok()?
         .into_dimensions()
         .ok()?;
-    Some(bytes.len() + width as usize * height as usize * 4)
+    still_cost(bytes.len(), width, height)
+}
+
+fn still_cost(compressed: usize, width: u32, height: u32) -> Option<usize> {
+    let pixels = u64::from(width) * u64::from(height);
+    if pixels == 0 || pixels > MAX_STILL_PIXELS || width.max(height) > 8192 {
+        return None;
+    }
+    compressed.checked_add(pixels as usize * 4)
 }
 
 /// Decodes and applies an anti-aliased circular alpha mask. Only the RGBA is
@@ -324,9 +341,19 @@ pub fn guild_icon_url(guild_id: &str, hash: &str) -> Option<String> {
 /// Only Discord's own CDN and media proxy, so viewing a channel never contacts
 /// third-party servers.
 pub fn is_discord_media(url: &str) -> bool {
-    let Some(rest) = url.strip_prefix("https://") else { return false };
-    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    host == "cdn.discordapp.com" || host == "media.discordapp.net" || host.ends_with(".discordapp.net")
+    reqwest::Url::parse(url).is_ok_and(|url| valid_media_origin(&url) && discord_media_host(&url))
+}
+
+fn valid_media_origin(url: &reqwest::Url) -> bool {
+    url.scheme() == "https" && url.username().is_empty() && url.password().is_none() && url.port().is_none()
+}
+
+fn discord_media_host(url: &reqwest::Url) -> bool {
+    url.host_str().is_some_and(|host| host == "cdn.discordapp.com" || host.ends_with(".discordapp.net"))
+}
+
+pub fn allowed_media_url(url: &reqwest::Url) -> bool {
+    valid_media_origin(url) && (discord_media_host(url) || url.host_str() == Some("media.tenor.com"))
 }
 
 /// `animated` asks for the GIF (only when animation is on).
@@ -397,10 +424,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn still_cost_enforces_limits_before_rendering() {
+        assert_eq!(still_cost(100, 400, 300), Some(480_100));
+        assert!(still_cost(100, 4096, 4096).is_some());
+        assert!(still_cost(100, 4097, 4096).is_none());
+        assert!(still_cost(100, 8193, 1).is_none());
+        assert!(still_cost(100, 0, 300).is_none());
+    }
+
+    #[test]
     fn only_discord_hosts() {
         assert!(is_discord_media("https://cdn.discordapp.com/emojis/1.png"));
         assert!(is_discord_media("https://images-ext-1.discordapp.net/external/x"));
         assert!(!is_discord_media("http://cdn.discordapp.com/x"));
+        assert!(!is_discord_media("https://user@media.discordapp.net/x"));
+        assert!(!is_discord_media("https://media.discordapp.net:8443/x"));
+        assert!(!allowed_media_url(&reqwest::Url::parse("https://example.org/image").unwrap()));
         assert!(!is_discord_media("https://evil.com/cdn.discordapp.com"));
         assert!(!is_discord_media("https://discordapp.net.evil.com/x"));
     }

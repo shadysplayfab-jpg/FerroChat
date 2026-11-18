@@ -3,7 +3,7 @@
 //! controls along the bottom, and the channel's text chat to the right.
 
 use iced::alignment::{Horizontal, Vertical};
-use iced::widget::{button, column, container, image, pick_list, row, stack, text, Column, Row, Space};
+use iced::widget::{button, column, container, image, pick_list, row, scrollable, stack, text, Column, Row, Space};
 use iced::{Alignment, Border, Color, ContentFit, Element, Length};
 
 use super::{blend, fill, label, quiet, thin_scroll, BOLD};
@@ -66,7 +66,12 @@ impl Session {
             }
         }
 
-        let width = (self.window.width - LEFT_COLUMNS - stage_chat_width(self.window.width) - PADDING * 2.0).max(MIN_TILE_WIDTH);
+        let sidebars = if self.compact_window() {
+            0.0
+        } else {
+            LEFT_COLUMNS + stage_chat_width(self.window.width)
+        };
+        let width = (self.window.width - sidebars - PADDING * 2.0).max(MIN_TILE_WIDTH);
         let height = (self.window.height - 150.0).max(200.0);
         let focused = self.focused_tile.as_deref().filter(|key| tiles.iter().any(|(k, _)| k == key));
         let body: Element<'_, Msg> = if tiles.is_empty() {
@@ -85,29 +90,35 @@ impl Session {
                     strip = strip.push(self.stage_tile(tile_key, kind, strip_height * 16.0 / 9.0, strip_height));
                 }
             }
-            column![container(large.unwrap_or_else(|| Space::new(0, 0).into())).center_x(Length::Fill), container(strip).center_x(Length::Fill)]
+            let focus = container(large.unwrap_or_else(|| Space::new(0, 0).into())).center_x(Length::Fill);
+            let thumbnails = scrollable(strip)
+                .direction(scrollable::Direction::Horizontal(scrollable::Scrollbar::new().width(5)))
+                .width(Length::Fill);
+            column![focus, thumbnails]
                 .spacing(GAP)
                 .into()
         } else {
             // As many columns as fit, filling the width like Discord's grid.
-            let count = tiles.len() as f32;
-            let mut columns = count.sqrt().ceil().max(1.0);
-            while columns > 1.0 && (width - GAP * (columns - 1.0)) / columns < MIN_TILE_WIDTH {
-                columns -= 1.0;
+            let count = tiles.len();
+            let mut columns = (count as f32).sqrt().ceil() as usize;
+            while columns > 1 && (width - GAP * (columns - 1) as f32) / (columns as f32) < MIN_TILE_WIDTH {
+                columns -= 1;
             }
-            let rows = (count / columns).ceil();
-            let by_width = (width - GAP * (columns - 1.0)) / columns;
+            let rows = count.div_ceil(columns) as f32;
+            let by_width = (width - GAP * (columns - 1) as f32) / columns as f32;
             let by_height = (height - GAP * (rows - 1.0)) / rows * 16.0 / 9.0;
             let tile_width = by_width.min(by_height).max(MIN_TILE_WIDTH);
             let mut grid = Column::new().spacing(GAP).align_x(Alignment::Center);
             let mut line = Row::new().spacing(GAP);
             for (index, (key, kind)) in tiles.iter().enumerate() {
                 line = line.push(self.stage_tile(key, kind, tile_width, tile_width * 9.0 / 16.0));
-                if (index + 1) as f32 % columns == 0.0 {
+                if (index + 1) % columns == 0 {
                     grid = grid.push(std::mem::replace(&mut line, Row::new().spacing(GAP)));
                 }
             }
-            grid = grid.push(line);
+            if !count.is_multiple_of(columns) {
+                grid = grid.push(line);
+            }
             container(thin_scroll(container(grid).center_x(Length::Fill))).center(Length::Fill).into()
         };
 

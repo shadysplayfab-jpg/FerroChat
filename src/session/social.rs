@@ -178,6 +178,7 @@ impl Session {
         match msg {
             SocialMsg::OpenHome => return self.social(SocialMsg::Tab(self.home.tab)),
             SocialMsg::Tab(tab) => {
+                self.compact_pane = super::CompactPane::Chat;
                 self.home.tab = tab;
                 if self.selected_guild.is_some() || self.selected_channel.is_some() {
                     self.select_guild(None);

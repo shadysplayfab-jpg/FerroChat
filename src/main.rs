@@ -64,6 +64,7 @@ fn main() -> iced::Result {
 
 #[derive(Debug, Clone)]
 pub enum Msg {
+    Scoped(u64, Box<Msg>),
     TokenChanged(String),
     Login,
     /// Email and password login: the fields, then sending them (or the 2FA code).
@@ -84,6 +85,7 @@ pub enum Msg {
     Tick,
     SelectGuild(Option<String>),
     SelectChannel(String),
+    CompactPane(session::CompactPane),
     /// A `#channel` mention or channel link: switches server if needed.
     JumpToChannel(String),
     /// A reply, message link, search result or pin.
@@ -233,6 +235,8 @@ struct App {
     /// Login problems and settings warnings shown on the login screen.
     login_error: Option<String>,
     session: Option<Session>,
+    account_generation: u64,
+    window_size: Size,
     show_settings: bool,
     /// Listed each time Settings opens (devices come and go).
     audio_devices: (Vec<String>, Vec<String>),
@@ -250,21 +254,7 @@ impl App {
     fn new(settings: Settings, warning: Option<String>) -> (Self, Task<Msg>) {
         #[cfg(feature = "demo")]
         let settings = demo_overrides(settings);
-        let mut app = Self {
-            theme: theme::set(settings.theme, settings.accent),
-            tray: None,
-            settings,
-            token_input: String::new(),
-            password_form: view::PasswordForm::default(),
-            login_error: warning,
-            session: None,
-            show_settings: false,
-            audio_devices: (Vec::new(), Vec::new()),
-            save_token_on_ready: false,
-            current_account: None,
-            custom_themes: Vec::new(),
-            theme_problems: Vec::new(),
-        };
+        let mut app = Self::initial_state(settings, warning);
         app.apply_theme();
         if app.settings.tray {
             match tray::create() {
@@ -285,7 +275,7 @@ impl App {
             let media = session.fetch_media();
             app.session = Some(session);
             app.show_settings = std::env::var_os("FERROCHAT_DEMO_SETTINGS").is_some();
-            return (app, media);
+            return (app, media.map(|msg| Msg::Scoped(0, Box::new(msg))));
         }
         #[allow(unreachable_code)]
         if let Ok(token) = std::env::var("DISCORD_TOKEN") {
@@ -322,14 +312,45 @@ impl App {
         (app, Task::none())
     }
 
+    fn initial_state(settings: Settings, warning: Option<String>) -> Self {
+        Self {
+            theme: theme::set(settings.theme, settings.accent),
+            tray: None,
+            settings,
+            token_input: String::new(),
+            password_form: view::PasswordForm::default(),
+            login_error: warning,
+            session: None,
+            account_generation: 0,
+            window_size: Size::new(1100.0, 720.0),
+            show_settings: false,
+            audio_devices: (Vec::new(), Vec::new()),
+            save_token_on_ready: false,
+            current_account: None,
+            custom_themes: Vec::new(),
+            theme_problems: Vec::new(),
+        }
+    }
+
     fn start(&mut self, token: String, save_on_ready: bool) {
         let token = token.trim();
         if !token.is_empty() {
-            self.session = Some(Session::new(token.to_owned(), self.settings.clone()));
+            self.clear_session();
+            let mut session = Session::new(token.to_owned(), self.settings.clone());
+            session.window = self.window_size;
+            self.session = Some(session);
             self.login_error = None;
             self.save_token_on_ready = save_on_ready;
-            self.current_account = None;
         }
+    }
+
+    fn clear_session(&mut self) {
+        self.session = None;
+        self.account_generation += 1;
+        self.password_form = view::PasswordForm::default();
+        self.token_input.clear();
+        self.save_token_on_ready = false;
+        self.current_account = None;
     }
 
     fn switch_account(&mut self, id: String) {
@@ -366,6 +387,17 @@ impl App {
     }
 
     fn update(&mut self, msg: Msg) -> Task<Msg> {
+        let msg = match msg {
+            Msg::Scoped(generation, msg) if generation == self.account_generation => *msg,
+            Msg::Scoped(..) => return Task::none(),
+            msg => msg,
+        };
+        let task = self.handle_message(msg);
+        let generation = self.account_generation;
+        task.map(move |msg| Msg::Scoped(generation, Box::new(msg)))
+    }
+
+    fn handle_message(&mut self, msg: Msg) -> Task<Msg> {
         // READY names the account, so the token is saved after the session sees it.
         if let (Msg::Gateway(Event::Ready(_)), Some(session)) = (&msg, &mut self.session) {
             let task = session.update(msg);
@@ -444,7 +476,7 @@ impl App {
             Msg::Logout => {
                 // Logging out also forgets this account's saved login.
                 let id = self.session.as_ref().and_then(|s| s.me.as_ref()).map(|me| me.id.clone()).or(self.current_account.take());
-                self.session = None;
+                self.clear_session();
                 self.show_settings = false;
                 if let Some(id) = id {
                     self.forget_account(&id);
@@ -454,23 +486,23 @@ impl App {
             Msg::SwitchAccount(id) => self.switch_account(id),
             Msg::AddAccount => {
                 // Back to the login screen; saved accounts stay saved.
-                self.session = None;
+                self.clear_session();
                 self.show_settings = false;
-                self.current_account = None;
             }
             Msg::RemoveAccount(id) => {
                 let current = self.session.as_ref().and_then(|s| s.me.as_ref()).is_some_and(|me| me.id == id);
                 self.forget_account(&id);
                 if current {
-                    self.session = None;
+                    self.clear_session();
                     self.show_settings = false;
                 }
             }
             Msg::Gateway(Event::AuthFailed(reason)) => {
-                self.session = None;
+                let account = self.current_account.take();
+                self.clear_session();
                 self.login_error = Some(reason);
                 // A rejected token is useless; don't retry it on next start.
-                if let Some(id) = self.current_account.take() {
+                if let Some(id) = account {
                     self.forget_account(&id);
                 }
                 let _ = credentials::forget(None);
@@ -495,6 +527,12 @@ impl App {
                     // Device enumeration can take a moment; keep it off the UI thread.
                     let list = async { tokio::task::spawn_blocking(voice::audio::device_names).await.unwrap_or_default() };
                     return Task::perform(list, |(inputs, outputs)| Msg::AudioDevices(inputs, outputs));
+                }
+            }
+            Msg::Social(session::SocialMsg::WindowSize(size)) => {
+                self.window_size = size;
+                if let Some(session) = &mut self.session {
+                    session.window = size;
                 }
             }
             Msg::AudioDevices(inputs, outputs) => self.audio_devices = (inputs, outputs),
@@ -627,7 +665,9 @@ impl App {
         if self.tray.is_some() {
             subscriptions.push(Subscription::run(tray::events).map(Msg::Tray));
         }
-        let Some(session) = &self.session else { return Subscription::batch(subscriptions) };
+        let global = Subscription::batch(subscriptions);
+        let Some(session) = &self.session else { return global };
+        let mut subscriptions = Vec::new();
         if !session.offline {
             subscriptions.push(
                 Subscription::run_with_id(session.token.clone(), gateway::connect(session.token.clone()))
@@ -662,7 +702,9 @@ impl App {
         if session.has_typing() {
             subscriptions.push(iced::time::every(Duration::from_secs(1)).map(|_| Msg::Tick));
         }
-        Subscription::batch(subscriptions)
+        let scoped = Subscription::batch(subscriptions).with(self.account_generation)
+            .map(|(generation, msg)| Msg::Scoped(generation, Box::new(msg)));
+        Subscription::batch([global, scoped])
     }
 
     fn view(&self) -> Element<'_, Msg> {
@@ -725,4 +767,23 @@ fn demo_overrides(mut settings: Settings) -> Settings {
         settings.animate_media = value == "1";
     }
     settings
+}
+
+#[cfg(test)]
+mod account_tests {
+    use super::*;
+
+    #[test]
+    fn account_switch_discards_old_task_results() {
+        let mut app = App::initial_state(Settings::default(), None);
+        app.start("first".to_owned(), false);
+        let old = app.account_generation;
+        app.start("second".to_owned(), false);
+        let channel: Channel = serde_json::from_value(serde_json::json!({"id": "123", "type": 1})).unwrap();
+        let response = Msg::DmOpened(Ok(channel));
+        let _ = app.update(Msg::Scoped(old, Box::new(response.clone())));
+        assert!(app.session.as_ref().unwrap().dms.is_empty());
+        let _ = app.update(Msg::Scoped(app.account_generation, Box::new(response)));
+        assert_eq!(app.session.as_ref().unwrap().dms[0].id, "123");
+    }
 }

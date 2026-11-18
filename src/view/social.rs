@@ -49,20 +49,7 @@ fn dialog(kind: DialogKind) -> Msg {
 fn chip(name: String, on: bool, msg: Msg) -> Element<'static, Msg> {
     button(text(name).size(13))
         .padding([4, 10])
-        .style(move |theme, status| {
-            let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-            let mut style = button::text(theme, status);
-            style.text_color = if on || hovered { p().text } else { p().muted };
-            style.background = if on {
-                Some(Background::Color(p().selected))
-            } else if hovered {
-                Some(Background::Color(Color { a: 0.5, ..p().selected }))
-            } else {
-                None
-            };
-            style.border = Border { radius: 6.0.into(), ..Border::default() };
-            style
-        })
+        .style(super::toggle_style(on))
         .on_press(msg)
         .into()
 }
@@ -128,7 +115,7 @@ impl Session {
             let create = button(text(format!("Create group DM ({})", self.home.group.len())).size(12))
                 .padding([5, 12])
                 .on_press(social(SocialMsg::CreateGroup));
-            tabs = tabs.push(Space::with_width(Length::Fill)).push(create);
+            tabs = tabs.push(create);
         }
         let body: Element<'_, Msg> = match self.home.tab {
             HomeTab::Add => self.add_friend_view(),
@@ -136,7 +123,7 @@ impl Session {
             tab => self.friend_list(tab),
         };
         container(column![
-            container(tabs).padding([10, 16]).width(Length::Fill),
+            container(tabs.wrap()).padding([10, 16]).width(Length::Fill),
             rule(),
             thin_scroll(container(body).padding([14, 20]).width(Length::Fill)).height(Length::Fill),
         ])
@@ -148,11 +135,12 @@ impl Session {
 
     fn friend_list(&self, tab: HomeTab) -> Element<'_, Msg> {
         let friends = self.friends(tab);
-        let search = text_input("Search", &self.home.filter).on_input(|t| social(SocialMsg::Filter(t))).padding(8);
+        let search = text_input("Filter by name", &self.home.filter).on_input(|t| social(SocialMsg::Filter(t))).padding(8);
         let heading = text(format!("{} — {}", tab.name().to_uppercase(), friends.len())).size(11).color(p().muted);
         let mut list = Column::new().spacing(2).push(search).push(container(heading).padding([10, 0]));
         if friends.is_empty() {
             let hint = match tab {
+                _ if !self.home.filter.trim().is_empty() => "No matches. Try another name.",
                 HomeTab::Online => "No one's around to play with right now.",
                 HomeTab::Pending => "There are no pending friend requests.",
                 HomeTab::Blocked => "You haven't blocked anyone.",

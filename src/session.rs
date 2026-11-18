@@ -303,7 +303,16 @@ pub struct Editing {
     draft: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactPane {
+    Browse,
+    Chat,
+    Call,
+    Members,
+}
+
 pub struct Session {
+    pub compact_pane: CompactPane,
     pub token: String,
     /// Demo sessions never connect.
     pub offline: bool,
@@ -452,6 +461,10 @@ pub const FUN_FACTS: [&str; 14] = [
 ];
 
 impl Session {
+    pub fn compact_window(&self) -> bool {
+        self.window.width < 920.0
+    }
+
     /// (step done, total) for the server icons after READY; `None` when icons are off.
     pub fn icons_progress(&self) -> Option<(usize, usize)> {
         if !self.settings.load_avatars {
@@ -477,6 +490,7 @@ impl Session {
             voice_controls,
             images: ImageCache::new(settings.image_cache_bytes()),
             member_lists: HashMap::new(),
+            compact_pane: CompactPane::Chat,
             show_members: settings.member_list,
             reacting_to: None,
             reaction_query: String::new(),
@@ -778,7 +792,20 @@ impl Session {
                 let remembered = self.last_channels.get(&guild.id).filter(|c| guild.channels.iter().any(|g| &g.id == *c)).cloned();
                 let first = || guild.channels.iter().find(|c| c.is_text() && c.parent_id.is_none()).or_else(|| guild.channels.iter().find(|c| c.is_text())).map(|c| c.id.clone());
                 if let Some(channel_id) = remembered.or_else(first) {
-                    return self.open(channel_id);
+                    let browsing = self.compact_window() && self.compact_pane == CompactPane::Browse;
+                    let task = self.open(channel_id);
+                    if browsing {
+                        self.compact_pane = CompactPane::Browse;
+                    }
+                    return task;
+                }
+            }
+            Msg::CompactPane(pane) => {
+                self.compact_pane = pane;
+                self.panel = None;
+                if pane == CompactPane::Members {
+                    self.show_members = true;
+                    return Task::batch([self.subscribe_members(), self.fetch_media()]);
                 }
             }
             Msg::SelectChannel(id) => return self.open(id),
@@ -809,6 +836,7 @@ impl Session {
                     SwitchTarget::Channel(id) => self.jump_to_channel(id),
                     SwitchTarget::Guild(id) => {
                         self.select_guild(Some(id));
+                        self.compact_pane = CompactPane::Browse;
                         Task::none()
                     }
                 };
@@ -1318,7 +1346,8 @@ impl Session {
             | Msg::ReloadThemes
             | Msg::CloseRequested(_)
             | Msg::Tray(_)
-            | Msg::AudioDevices(..) => {}
+            | Msg::AudioDevices(..)
+            | Msg::Scoped(..) => {}
         }
         Task::none()
     }
@@ -2218,6 +2247,14 @@ impl Session {
     }
 
     fn open(&mut self, channel_id: String) -> Task<Msg> {
+        if self.compact_window() {
+            self.panel = None;
+        }
+        self.compact_pane = if self.channel(&channel_id).is_some_and(Channel::is_voice) {
+            CompactPane::Call
+        } else {
+            CompactPane::Chat
+        };
         if self.selected_channel.as_deref() != Some(channel_id.as_str()) {
             self.highlighted = None;
             // Pins and DM search belong to the channel being left.
